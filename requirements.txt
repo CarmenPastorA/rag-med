@@ -1,0 +1,8 @@
+pandas
+tqdm
+requests
+bs4
+pymupdf4llm
+sentence-transformers
+faiss-cpu
+numpy<2.0.0

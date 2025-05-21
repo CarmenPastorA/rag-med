@@ -1,0 +1,29 @@
+# pattern **/<name> excludes all <name>s anywhere in the project
+
+**/__pycache__/
+data/priori_resources/*
+!data/priori_resources/.gitkeep
+data/posteriori_resources/*
+!data/posteriori_resources/README.md
+models/*
+!models/README.md
+resource_builder/cimavet_processor.log
+
+venv/
+__pycache__/
+.ipynb_checkpoints/
+
+# Archivos de modelos y pesos
+*.pt
+*.bin
+*.onnx
+*.pkl
+*.h5
+
+# Archivos grandes generados
+*.faiss
+*.jsonl
+*.log
+
+# Ignora carpetas específicas
+data/posteriori_resources/faiss_stuff/

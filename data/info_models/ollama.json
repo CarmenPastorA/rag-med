@@ -1,0 +1,72 @@
+{
+  "qwen2": {
+    "model_name": "qwen2",
+    "tokenizer": "cl100k_base",
+    "context": 8192,
+    "use_dynamic_context_size": true,
+    "endpoint": "http://localhost:11434/api/chat",
+    "temperature": 0,
+    "keep_alive": -1,
+    "seed": 42
+  },
+  "mixtral": {
+    "model_name": "mixtral",
+    "tokenizer": "cl100k_base",
+    "context": 8192,
+    "use_dynamic_context_size": true,
+    "endpoint": "http://localhost:11434/api/chat",
+    "temperature": 0,
+    "keep_alive": -1,
+    "seed": 42
+  },
+  "phi3": {
+    "model_name": "phi3",
+    "tokenizer": "cl100k_base",
+    "context": 8192,
+    "use_dynamic_context_size": true,
+    "endpoint": "http://localhost:11434/api/chat",
+    "temperature": 0,
+    "keep_alive": -1,
+    "seed": 42
+  },
+  "mistral": {
+    "model_name": "mistral",
+    "tokenizer": "cl100k_base",
+    "context": 8192,
+    "use_dynamic_context_size": true,
+    "endpoint": "http://localhost:11434/api/chat",
+    "temperature": 0,
+    "keep_alive": -1,
+    "seed": 42
+  },
+  "llama3": {
+    "model_name": "llama3",
+    "tokenizer": "cl100k_base",
+    "context": 8192,
+    "use_dynamic_context_size": true,
+    "endpoint": "http://localhost:11434/api/chat",
+    "temperature": 0,
+    "keep_alive": -1,
+    "seed": 42
+  },
+  "llama3.2": {
+    "model_name": "llama3.2",
+    "tokenizer": "cl100k_base",
+    "context": 8192,
+    "use_dynamic_context_size": true,
+    "endpoint": "http://localhost:11434/api/chat",
+    "temperature": 0,
+    "keep_alive": -1,
+    "seed": 42
+  },
+  "huihui_ai/qwen2.5-1m-abliterated": {
+    "model_name": "huihui_ai/qwen2.5-1m-abliterated",
+    "tokenizer": "cl100k_base",
+    "context": 8192,
+    "use_dynamic_context_size": true,
+    "endpoint": "http://localhost:11434/api/chat",
+    "temperature": 0,
+    "keep_alive": -1,
+    "seed": 42
+  }
+}

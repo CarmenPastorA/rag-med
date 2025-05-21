@@ -1,0 +1,8 @@
+La información de contexto está a continuación, y es parte de una o varias fichas técnicas de medicamentos de uso veterinario.
+Los fragmentos de cada ficha técnica comienzan con el nombre del medicamento correspondiente, para que puedas distinguir cada una de las fichas técnicas.
+---------------------
+{context}
+---------------------
+Dada la información de las fichas técnicas y no el conocimiento previo, responde a la siguiente pregunta.
+Pregunta: {question}
+Answer: 

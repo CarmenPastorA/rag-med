@@ -1,0 +1,26 @@
+{
+  "gpt-4-8k": {
+    "model_name": "gpt-4-8k",
+    "tokenizer": "cl100k_base",
+    "context": 8192,
+    "temperature": 0.3,
+    "endpoint": "https://aemps-llm.openai.azure.com/",
+    "api_version": "2024-02-15-preview"
+  },
+  "gpt4": {
+    "model_name": "gpt4",
+    "tokenizer": "cl100k_base",
+    "context": 32000,
+    "temperature": 0.3,
+    "endpoint": "https://aemps-llm.openai.azure.com/",
+    "api_version": "2024-02-15-preview"
+  },
+  "gpt-4": {
+    "model_name": "gpt-4",
+    "tokenizer": "cl100k_base",
+    "context": 128000,
+    "temperature": 0.3,
+    "endpoint": "https://aemps-gptx.openai.azure.com/",
+    "api_version": "2024-02-15-preview"
+  }
+}
