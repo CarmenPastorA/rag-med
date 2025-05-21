@@ -1,0 +1,109 @@
+import json
+import os
+from datetime import datetime
+from collections import defaultdict
+import numpy as np
+
+# Add parent directory to path to access shared modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from shared import dunder_info
+dunder_info.inject_dunder(__name__) # injects the variables
+
+from tools.arqa.faiss_search import FaissSearch
+from shared.veterinary_utils.embedding_model import EmbeddingModel
+from tools.arqa.evaluation.faiss.metrics import precision_at_k, recall_at_k, hit_at_k, mrr
+
+# === Evaluation configuration ===
+K = 5  # number of results to retrieve
+DEVICE = "cuda"  # "cpu"
+EMBEDDING_MODEL_PATH = "intfloat/multilingual-e5-large"
+INDEX_PATH = "data/posteriori_resources/faiss_stuff/index.faiss"
+MAPPING_PATH = "data/posteriori_resources/faiss_stuff/mapping.json"
+CHUNKS_PATH = "data/posteriori_resources/faiss_stuff/chunks.json"
+QUESTIONS_PATH = "tools/arqa/evaluation/faiss/synthetic_validation_dataset.jsonl"
+
+# Create a unique name for this evaluation run
+RUN_NAME = f"eval_run_{datetime.now().strftime('%Y-%m-%d')}_k{K}_e5"
+LOG_DIR = "tools/arqa/evaluation/faiss/logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_JSON = os.path.join(LOG_DIR, f"{RUN_NAME}.json")
+LOG_MD = os.path.join(LOG_DIR, f"{RUN_NAME}.md")
+
+# === Load FAISS retriever with embedding model ===
+embedding_model = EmbeddingModel(EMBEDDING_MODEL_PATH, DEVICE, 512)
+retriever = FaissSearch(embedding_model)
+retriever.load_index(INDEX_PATH, MAPPING_PATH, CHUNKS_PATH)
+
+# === Load evaluation questions ===
+with open(QUESTIONS_PATH, "r", encoding="utf-8") as f:
+    questions = [json.loads(line) for line in f]
+
+# === Run retrieval and evaluate per question ===
+results = []
+for q in questions:
+    query = q["question"]
+    expected_ids = q["relevant_doc_ids"]
+
+    # Search using FAISS (no context)
+    top_k = retriever.search(query, k=K)
+    retrieved_ids = [r["metadata"]["document_id"] for r in top_k]
+
+    # Compute metrics
+    results.append({
+        "question": query,
+        "relevant_doc_ids": expected_ids,
+        "retrieved_doc_ids": retrieved_ids,
+        "precision@k": precision_at_k(retrieved_ids, expected_ids),
+        "recall@k": recall_at_k(retrieved_ids, expected_ids),
+        "hit@k": hit_at_k(retrieved_ids, expected_ids),
+        "mrr": mrr(retrieved_ids, expected_ids)
+    })
+
+# === Compute global summary ===
+summary = defaultdict(list)
+for r in results:
+    for m in ["precision@k", "recall@k", "hit@k", "mrr"]:
+        summary[m].append(r[m])
+
+global_metrics = {
+    "mean_precision@k": round(np.mean(summary["precision@k"]), 4),
+    "mean_recall@k": round(np.mean(summary["recall@k"]), 4),
+    "mean_hit@k": round(np.mean(summary["hit@k"]), 4),
+    "mean_mrr": round(np.mean(summary["mrr"]), 4),
+    "questions_evaluated": len(results),
+    "k": K,
+    "embedding_model": EMBEDDING_MODEL_PATH,
+    "device": DEVICE,
+    "run_name": RUN_NAME
+}
+
+# === Save raw results to JSON log ===
+with open(LOG_JSON, "w", encoding="utf-8") as f:
+    json.dump({"summary": global_metrics, "results": results}, f, indent=2, ensure_ascii=False)
+
+# === Write summary Markdown report ===
+with open(LOG_MD, "w", encoding="utf-8") as f:
+    f.write(f"# FAISS Evaluation Report - {RUN_NAME}\n\n")
+    f.write("## Configuration\n")
+    f.write(f"- `Top-k`: {K}\n")
+    f.write(f"- `Embedding model`: `{EMBEDDING_MODEL_PATH}`\n")
+    f.write(f"- `Device`: `{DEVICE}`\n")
+    f.write(f"- `Date`: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
+
+    f.write("## Global Results\n\n")
+    for k, v in global_metrics.items():
+        f.write(f"- **{k.replace('_', ' ').capitalize()}**: {v}\n")
+
+    f.write("\n---\n## Sample Questions (Top 5)\n\n")
+    for r in results[:5]:
+        f.write(f"- **Question:** {r['question']}\n")
+        f.write(f"  - Relevant doc IDs: {r['relevant_doc_ids']}\n")
+        f.write(f"  - Retrieved doc IDs: {r['retrieved_doc_ids']}\n")
+        f.write(f"  - P@{K}: {r['precision@k']}, R@{K}: {r['recall@k']}, MRR: {r['mrr']}\n\n")
+
+# === Final printout to terminal ===
+print("\nEvaluation completed.")
+print("Global summary:")
+for k, v in global_metrics.items():
+    print(f"{k}: {v}")
+print(f"\nLogs saved to:\n- JSON: {LOG_JSON}\n- Markdown: {LOG_MD}")
