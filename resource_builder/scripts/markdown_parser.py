@@ -9,7 +9,9 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from shared.veterinary_utils.utils import (convert_timestamp_to_date,
                                            format_registration_for_url,
-                                           format_registration_number)
+                                           format_registration_number,
+                                           get_text)
+from resource_builder.scripts.species_normalizer import SpeciesNormalizer
 from shared import dunder_info
 dunder_info.inject_dunder(__name__) # injects the variables
 
@@ -19,7 +21,7 @@ class MarkdownParser:
     and convert them into structured JSON format.
     """
     
-    def __init__(self, markdown_path, merged_json, json_output_path):
+    def __init__(self, markdown_path, merged_json, json_output_path, species_mapping_file=None):
         """
         Initialize the markdown parser.
         
@@ -27,10 +29,13 @@ class MarkdownParser:
             markdown_path (str): Path to the markdown file
             merged_json (dict): Dictionary with regulatory data
             json_output_path (str): Path where the JSON output will be saved
+            species_mapping_file (str, optional): Path to the species mapping file.
+                                                  If None, will use the default path.
         """
         self.markdown_path = markdown_path
         self.merged_json = merged_json
         self.json_output_path = json_output_path
+        self.species_normalizer = SpeciesNormalizer(species_mapping_file)
         self.text = None
         # Define valid section IDs for veterinary technical sheets (1-10)
         self.valid_section_ids = [str(i) for i in range(1, 11)]
@@ -45,8 +50,7 @@ class MarkdownParser:
             bool: True if successful, False otherwise
         """
         try:
-            with open(self.markdown_path, "r", encoding="utf-8") as f:
-                self.text = f.read()
+            self.text = get_text(self.markdown_path)
             return True
         except Exception as e:
             print(f"Error loading markdown file: {str(e)}")
@@ -375,6 +379,42 @@ class MarkdownParser:
         num_reg = format_registration_for_url(document_id)
         url = f"https://cimavet.aemps.es/cimavet/pdfs/es/ft/{num_reg}/FT_{num_reg}.pdf"
         
+        # Get species from metadata
+        especies_cimavet = metadata.get("especies", "")
+        
+        # Normalize species names in the especies_cimavet data
+        normalized_especies_cimavet = self.species_normalizer.normalize_species_in_json(especies_cimavet)
+        
+        # Get indications from metadata
+        indicaciones = metadata.get("indicaciones", "")
+        
+        # Normalize species names in indications
+        normalized_indicaciones = self.species_normalizer.normalize_indications_species(indicaciones)
+        
+        # Get contraindications from metadata
+        contraindicaciones = metadata.get("contraindicaciones", "")
+        
+        # Normalize species names in contraindications
+        normalized_contraindicaciones = self.species_normalizer.normalize_contraindications_species(contraindicaciones)
+        
+        # Get adverse reactions from metadata
+        ram = metadata.get("reaccionesAdversas", "")
+        
+        # Normalize species names in adverse reactions
+        normalized_ram = self.species_normalizer.normalize_adverse_reactions_species(ram)
+        
+        # Get interactions from metadata
+        interacciones = metadata.get("interacciones", "")
+        
+        # Normalize species names in interactions
+        normalized_interacciones = self.species_normalizer.normalize_interactions_species(interacciones)
+        
+        # Get withdrawal period from metadata
+        tespera = metadata.get("tiemposEspera", "")
+        
+        # Normalize species names in withdrawal period
+        normalized_tespera = self.species_normalizer.normalize_withdrawal_period_species(tespera)
+        
         # Construct the JSON output
         json_output = {
             "document_id": document_id,
@@ -384,7 +424,7 @@ class MarkdownParser:
             "fecha_primera_autorizacion": convert_timestamp_to_date(cimavet_data.get("primeraAutorizacion", -1)),
             "codigos_atc": cimavet_data.get("atcs", ""),
             "especies_destino": especies_destino,
-            "especies_cimavet": metadata.get("especies", ""), # Added the species from metadata to compare
+            "especies_cimavet": normalized_especies_cimavet, # Added the species from metadata to compare
             "principios_activos": cimavet_data.get("pactivos", ""),
             "principios_activos_cimavet": metadata.get("principiosActivos", ""), # Added from metadata to compare
             "excipientes": cimavet_data.get("excip", ""),
@@ -393,11 +433,11 @@ class MarkdownParser:
             "condiciones_administracion": cimavet_data.get("administracion", {}).get("nombre", ""),
             "antibiotico": cimavet_data.get("antibiotico", False),
             "vias_administracion": metadata.get("viasAdministracion", ""),
-            "indicaciones": metadata.get("indicaciones", ""),
-            "contraindicaciones": metadata.get("contraindicaciones", ""),
-            "reacciones_adversas": metadata.get("reaccionesAdversas", ""),
-            "interacciones": metadata.get("interacciones", ""),
-            "tiempo_espera": metadata.get("tiemposEspera", ""),
+            "indicaciones": normalized_indicaciones,
+            "contraindicaciones": normalized_contraindicaciones,
+            "reacciones_adversas": normalized_ram,
+            "interacciones": normalized_interacciones,
+            "tiempo_espera": normalized_tespera,
             "presentaciones": metadata.get("presentaciones", ""),
             "secciones": sections
         }

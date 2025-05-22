@@ -20,6 +20,7 @@ import sys
 # Add parent directory to path to access shared modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from shared import dunder_info
+from shared.veterinary_utils.utils import get_dict_from_json
 from shared.veterinary_utils.embedding_model import EmbeddingModel
 dunder_info.inject_dunder(__name__) # injects the variables
 
@@ -66,8 +67,7 @@ class FaissStorage:
         Returns:
             Dictionary with fragments and their metadata
         """
-        with open(json_path, 'r', encoding='utf-8') as f:
-            doc = json.load(f)
+        doc = get_dict_from_json(json_path)
         
         # Extract document ID
         doc_id = doc.get('document_id', os.path.basename(json_path).split('.')[0])
@@ -83,19 +83,242 @@ class FaissStorage:
         med_name = doc.get('nombre_medicamento', '')
         lab_titular = doc.get('laboratorio_titular', '')
         fecha_autorizacion = doc.get('fecha_primera_autorizacion', '')
+        
+        # Process ATC codes
         atc = "Códigos ATC:\n" + "\n".join(
             f"- {item.get('codigo', '')}: {item.get('nombre', '')} (Nivel {item.get('nivel', '')})" \
                 for item in doc.get("codigos_atc", [])
         )
-        target_species = doc.get('especies_destino', '')
+        
+        # Process species - update to use normalized names from especies_cimavet
+        species_raw = doc.get('especies_destino', '')
+        species_cimavet = doc.get('especies_cimavet', [])
+        if species_cimavet:
+            target_species = ", ".join([sp.get('nombre_normalizado', sp.get('nombre', '')) for sp in species_cimavet])
+        else:
+            target_species = species_raw
+        
+        # Process active ingredients - include both text and structured data
         active_ingredients = doc.get('principios_activos', '')
-        excipients = doc.get('escipientes', '')
+        active_ingredients_cimavet = doc.get('principios_activos_cimavet', [])
+        if active_ingredients_cimavet:
+            active_ingredients_detail = "Principios activos detallados:\n" + "\n".join(
+                f"- {item.get('nombre', '')}: {item.get('cantidad', '')} {item.get('unidad', '')}" \
+                    for item in active_ingredients_cimavet
+            )
+        else:
+            active_ingredients_detail = ""
+        
+        excipients = doc.get('excipientes', '')
         pharm_form = doc.get('forma_farmaceutica', '')
         dis_conditions = doc.get('condiciones_dispensacion', '')
         admin_conditions = doc.get('condiciones_administracion', '')
         antibiotic = doc.get('antibiotico', False)
         
-        # Complete document as a chunk
+        # Process administration routes
+        admin_routes = doc.get('vias_administracion', [])
+        if admin_routes:
+            admin_routes_text = "Vías de administración:\n" + "\n".join(
+                f"- {route.get('nombre', '')}" for route in admin_routes
+            )
+        else:
+            admin_routes_text = ""
+        
+        # Process indications by species
+        indications = doc.get('indicaciones', [])
+        if indications:
+            # Group indications by species
+            indications_by_species = {}
+            for indication in indications:
+                especie = indication.get('especie', {})
+                especie_name = especie.get('nombre_normalizado', especie.get('nombre', ''))
+                if especie_name not in indications_by_species:
+                    indications_by_species[especie_name] = []
+                indications_by_species[especie_name].append(indication.get('nombre', ''))
+            
+            # Format indications text
+            indications_text = "Indicaciones:\n"
+            for especie, inds in indications_by_species.items():
+                indications_text += f"Indicaciones para {especie}:\n"
+                for ind in inds:
+                    indications_text += f"- {ind}\n"
+        else:
+            indications_text = ""
+        
+        # Process contraindications - handling multiple formats
+        contraindications = doc.get('contraindicaciones', [])
+        if contraindications:
+            # Separate contraindications by type
+            general_contras = []
+            species_specific_contras = {}
+            contraindicated_species = []
+            
+            for contra in contraindications:
+                # Format 1: General contraindication without species
+                if 'especie' not in contra and not contra.get('es_especie', False):
+                    general_contras.append(contra.get('nombre', ''))
+                # Format 2: Species-specific contraindication
+                elif 'especie' in contra:
+                    especie = contra.get('especie', {})
+                    especie_name = especie.get('nombre_normalizado', especie.get('nombre', ''))
+                    if especie_name not in species_specific_contras:
+                        species_specific_contras[especie_name] = []
+                    species_specific_contras[especie_name].append(contra.get('nombre', ''))
+                # Format 3: Contraindication is itself a species
+                elif contra.get('es_especie', False):
+                    species_name = contra.get('nombre_normalizado', contra.get('nombre', ''))
+                    contraindicated_species.append(species_name)
+            
+            # Format contraindications text
+            contraindications_text = "Contraindicaciones:\n"
+            
+            # General contraindications
+            if general_contras:
+                for contra in general_contras:
+                    contraindications_text += f"- {contra}\n"
+            
+            # Species-specific contraindications
+            for especie, contras in species_specific_contras.items():
+                contraindications_text += f"Contraindicaciones para {especie}:\n"
+                for contra in contras:
+                    contraindications_text += f"- {contra}\n"
+            
+            # Contraindicated species
+            if contraindicated_species:
+                contraindications_text += "No usar en las siguientes especies:\n"
+                for species in contraindicated_species:
+                    contraindications_text += f"- {species}\n"
+        else:
+            contraindications_text = ""
+        
+        # Process adverse reactions - handling multiple formats
+        adverse_reactions = doc.get('reacciones_adversas', [])
+        if adverse_reactions:
+            # Group reactions by species
+            reactions_by_species = {}
+            general_reactions = []
+            
+            for reaction in adverse_reactions:
+                # Format 1: Species-specific reaction
+                if 'especie' in reaction:
+                    especie = reaction.get('especie', {})
+                    especie_name = especie.get('nombre_normalizado', especie.get('nombre', ''))
+                    if especie_name not in reactions_by_species:
+                        reactions_by_species[especie_name] = []
+                    
+                    frecuencia = reaction.get('frecuencia', {}).get('nombre', '')
+                    nombre = reaction.get('nombre', '')
+                    if frecuencia:
+                        reaction_text = f"{nombre} ({frecuencia})"
+                    else:
+                        reaction_text = nombre
+                        
+                    reactions_by_species[especie_name].append(reaction_text)
+                # Format 2: General reaction without species
+                else:
+                    frecuencia = reaction.get('frecuencia', {}).get('nombre', '')
+                    nombre = reaction.get('nombre', '')
+                    if frecuencia:
+                        reaction_text = f"{nombre} ({frecuencia})"
+                    else:
+                        reaction_text = nombre
+                    general_reactions.append(reaction_text)
+            
+            # Format reactions text
+            adverse_reactions_text = "Reacciones adversas:\n"
+            
+            # General reactions
+            if general_reactions:
+                for reaction in general_reactions:
+                    adverse_reactions_text += f"- {reaction}\n"
+            
+            # Species-specific reactions
+            for especie, reactions in reactions_by_species.items():
+                adverse_reactions_text += f"En {especie}:\n"
+                for reaction in reactions:
+                    adverse_reactions_text += f"- {reaction}\n"
+        else:
+            adverse_reactions_text = ""
+        
+        # Process interactions - handling multiple formats
+        interactions = doc.get('interacciones', [])
+        if interactions:
+            # Group interactions by species
+            interactions_by_species = {}
+            general_interactions = []
+            
+            for interaction in interactions:
+                # Format 1: Species-specific interaction
+                if 'especie' in interaction:
+                    especie = interaction.get('especie', {})
+                    especie_name = especie.get('nombre_normalizado', especie.get('nombre', ''))
+                    if especie_name not in interactions_by_species:
+                        interactions_by_species[especie_name] = []
+                    interactions_by_species[especie_name].append(interaction.get('nombre', ''))
+                # Format 2: General interaction without species
+                else:
+                    general_interactions.append(interaction.get('nombre', ''))
+            
+            # Format interactions text
+            interactions_text = "Interacciones:\n"
+            
+            # General interactions
+            if general_interactions:
+                for interaction in general_interactions:
+                    interactions_text += f"- {interaction}\n"
+            
+            # Species-specific interactions
+            for especie, inters in interactions_by_species.items():
+                interactions_text += f"En {especie}:\n"
+                for inter in inters:
+                    interactions_text += f"- {inter}\n"
+        else:
+            interactions_text = ""
+        
+        # Process waiting time - handling multiple formats
+        waiting_time = doc.get('tiempo_espera', '')
+        if waiting_time:
+            # Format 1: String
+            if isinstance(waiting_time, str):
+                waiting_time_text = f"Tiempo de espera: {waiting_time}" if waiting_time else ""
+            # Format 2: List of objects
+            elif isinstance(waiting_time, list):
+                waiting_time_text = "Tiempo de espera:\n"
+                
+                # Group by species
+                waiting_time_by_species = {}
+                for wt in waiting_time:
+                    especie = wt.get('especie', {})
+                    especie_name = especie.get('nombre_normalizado', especie.get('nombre', ''))
+                    if especie_name not in waiting_time_by_species:
+                        waiting_time_by_species[especie_name] = []
+                    
+                    tejido = wt.get('tejido', {}).get('nombre', '')
+                    cantidad = wt.get('cantidad', '')
+                    unidad = wt.get('unidadTiempo', {}).get('nombre', '')
+                    wt_text = f"{tejido}: {cantidad} {unidad}"
+                    waiting_time_by_species[especie_name].append(wt_text)
+                
+                # Format waiting time text by species
+                for especie, wts in waiting_time_by_species.items():
+                    waiting_time_text += f"En {especie}:\n"
+                    for wt in wts:
+                        waiting_time_text += f"- {wt}\n"
+            else:
+                waiting_time_text = ""
+        else:
+            waiting_time_text = ""
+        
+        # Process presentations
+        presentations = doc.get('presentaciones', [])
+        if presentations:
+            presentations_text = "Presentaciones:\n" + "\n".join(
+                f"- {item.get('nombre', '')}" for item in presentations
+            )
+        else:
+            presentations_text = ""
+        
+        # Complete document as a chunk - now with all new fields
         doc_text = f"Ficha técnica: {med_name}\n"
         doc_text += f"Enlace: {doc_link}\n"
         doc_text += f"Laboratorio titular: {lab_titular}\n"
@@ -103,11 +326,31 @@ class FaissStorage:
         doc_text += f"Especies de destino: {target_species}\n"
         doc_text += f"{atc}\n"
         doc_text += f"Principios activos: {active_ingredients}\n"
+        if active_ingredients_detail:
+            doc_text += f"{active_ingredients_detail}\n"
         doc_text += f"Excipientes: {excipients}\n"
         doc_text += f"Forma farmacéutica: {pharm_form}\n"
         doc_text += f"Condiciones de dispensación: {dis_conditions}\n"
         doc_text += f"Condiciones de administración: {admin_conditions}\n"
-        doc_text += f"Este medicamento{' no' if not antibiotic else ''} es un antibiótico."
+        doc_text += f"Este medicamento{' no' if not antibiotic else ''} es un antibiótico.\n"
+        
+        # Add new fields to the document text
+        if admin_routes_text:
+            doc_text += f"{admin_routes_text}\n"
+        if indications_text:
+            doc_text += f"{indications_text}\n"
+        if contraindications_text:
+            doc_text += f"{contraindications_text}\n"
+        if adverse_reactions_text:
+            doc_text += f"{adverse_reactions_text}\n"
+        if interactions_text:
+            doc_text += f"{interactions_text}\n"
+        if waiting_time_text:
+            doc_text += f"{waiting_time_text}\n"
+        if presentations_text:
+            doc_text += f"{presentations_text}\n"
+        
+        doc_text += f"-----"
         
         chunk_id = f"{doc_id}{self.separator}full"
         chunks[chunk_id] = {
@@ -130,7 +373,7 @@ class FaissStorage:
             chunk_id = f"{doc_id}{self.separator}{section_id}"
             
             chunks[chunk_id] = {
-                "text": med_name + "\n\n" + section_text,
+                "text": f"Nombre del Medicamento: {med_name}\n\n{section_text}\n-----",
                 "metadata": {
                     "document_id": doc_id,
                     "chunk_type": "section",
@@ -150,7 +393,7 @@ class FaissStorage:
                 chunk_id = f"{doc_id}{self.separator}{subsection_id}"
                 
                 chunks[chunk_id] = {
-                    "text": med_name + "\n\n" + subsection_text,
+                    "text": f"Nombre del Medicamento: {med_name}\n\n{subsection_text}\n-----",
                     "metadata": {
                         "document_id": doc_id,
                         "chunk_type": "subsection",

@@ -26,7 +26,9 @@ import re
 import requests
 from tqdm import tqdm
 import logging
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import (ThreadPoolExecutor, 
+                                ProcessPoolExecutor,
+                                as_completed)
 import pandas as pd
 import pymupdf4llm
 import time
@@ -54,7 +56,7 @@ logging.basicConfig(
 logger = logging.getLogger("CIMAVet-Processor")
 
 class CIMAVetProcessor:
-    def __init__(self, output_dir, num_workers=5, max_eu_workers=2, max_retries=3, max_empty_responses=30):
+    def __init__(self, output_dir, num_workers=20, max_eu_workers=2, max_retries=3, max_empty_responses=30):
         """
         Initializes the CIMAVet processor
         
@@ -185,7 +187,7 @@ class CIMAVetProcessor:
 
             pact_mapping_path = os.path.join(project_root, "data/priori_resources/pact_antibioticos.csv")
 
-            df = pd.read_csv(pact_mapping_path,sep=';',dtype=str)
+            df = pd.read_csv(pact_mapping_path, sep=';',dtype=str)
             df = df.drop_duplicates(subset=["COD_PACTIV"])
             mapping = df.set_index("COD_PACTIV")[["Categoría", "Familia", "Principio activo"]].to_dict(orient="index")
 
@@ -214,9 +216,39 @@ class CIMAVetProcessor:
         return enriched
 
         
+    # Worker function to enrich a single record
+    def _enrich_single_record(self, item):
+        """
+        Enrich a single medication record with metadata
+        
+        Args:
+            item (tuple): Tuple containing (reg_num, medication_data)
+            
+        Returns:
+            tuple: Tuple containing (reg_num, enriched_data)
+        """
+        reg_num, medication_data = item
+        
+        metadata = self.get_presentation_extra_metadata(reg_num)
+        if metadata:
+            medication_data["metadata"] = metadata
+            
+            # If the medication is an antibiotic, enrich with antibiotic details
+            if medication_data.get("antibiotico") is True:
+                pactivos = metadata.get("principiosActivos", [])
+                enriched_antibioticos = self._build_antibiotic_details(pactivos)
+                medication_data["antibiotico"] = enriched_antibioticos
+            
+            return reg_num, medication_data, True
+        
+        return reg_num, medication_data, False
+        
     # 2. Merge all previous JSONs into a single one (for efficiency in subsequent steps)
     def merge_json_files(self):
-        """Merge all JSON files into a single dictionary format and enrich with extra metadata"""
+        """
+        Merge all JSON files into a single dictionary format and enrich with extra metadata
+        using parallel processing to speed up HTTP requests
+        """
         logger.info("Merging JSON files...")
         merged_data = {}
         
@@ -238,22 +270,34 @@ class CIMAVetProcessor:
                 logger.error(f"Error processing {json_file}: {str(e)}")
 
         # Log how many registration numbers we will enrich
-        logger.info(f"Enriching {len(merged_data)} medications with full metadata and presentations info...")
+        total_records = len(merged_data)
+        logger.info(f"Enriching {total_records} medications with full metadata and presentations info...")
 
-        enriched = 0
-        for reg_num in tqdm(merged_data.keys(), desc="Fetching full metadata"):
-
-            metadata = self.get_presentation_extra_metadata(reg_num)
-            if metadata:
-                merged_data[reg_num]["metadata"] = metadata
-
-                # If the medication is an antibiotic, enrich with antibiotic details
-                if merged_data[reg_num].get("antibiotico") is True:
-                    pactivos = metadata.get("principiosActivos", [])
-                    enriched_antibioticos = self._build_antibiotic_details(pactivos)
-                    merged_data[reg_num]["antibiotico"] = enriched_antibioticos
+        # Create a list of items to be processed
+        items_to_process = list(merged_data.items())
+        enriched_count = 0
+        
+        # Initialize the progress bar
+        progress_bar = tqdm(total=total_records, desc="Fetching full metadata")
+        
+        # Process in blocks to avoid exhausting resources
+        batch_size = 500
+        for i in range(0, len(items_to_process), batch_size):
+            batch = items_to_process[i:i+batch_size]
+            
+            # Using ThreadPoolExecutor to parallelize HTTP requests
+            with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+                futures = {executor.submit(self._enrich_single_record, item): item[0] for item in batch}
                 
-                enriched += 1
+                # Process results as they are completed
+                for future in as_completed(futures):
+                    reg_num, updated_data, was_enriched = future.result()
+                    merged_data[reg_num] = updated_data
+                    if was_enriched:
+                        enriched_count += 1
+                    progress_bar.update(1)
+        
+        progress_bar.close()
         
         # Save the merged JSON
         with open(self.merged_json_path, 'w', encoding='utf-8') as f:
@@ -261,6 +305,7 @@ class CIMAVetProcessor:
         
         count = len(merged_data)
         logger.info(f"Merged {count} medication records into master_merge.json")
+        logger.info(f"Successfully enriched {enriched_count} records with metadata")
         return count > 0
     
     # 3. Extract registration numbers
@@ -339,7 +384,7 @@ class CIMAVetProcessor:
         except Exception as e:
             logger.error(f"Error processing merged JSON: {str(e)}")
         
-        #self.registration_numbers = [r for r in registration_numbers if not r.startswith("EU")] # skip EU reg numbers
+        self.registration_numbers = [r for r in registration_numbers if not r.startswith("EU")] # skip EU reg numbers
         self.registration_numbers = registration_numbers
         logger.info(f"{len(registration_numbers)} registration numbers have been extracted")
         
