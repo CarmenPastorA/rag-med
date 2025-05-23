@@ -16,7 +16,7 @@ dunder_info.inject_dunder(__name__) # injects the variables
 
 from tools.arqa.faiss_search import FaissSearch
 from shared.veterinary_utils.embedding_model import EmbeddingModel
-from tools.arqa.evaluation.faiss.metrics import precision_at_k, recall_at_k, hit_at_k, mrr
+from tools.arqa.evaluation.metrics import precision_at_k, recall_at_k, hit_at_k, mrr
 
 # === Evaluation configuration ===
 K = 5
@@ -28,7 +28,7 @@ CHUNKS_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/
 QUESTIONS_PATH = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/synthetic_validation_dataset.jsonl")
 
 # Create a unique name for this evaluation run
-RUN_NAME = f"eval_run_{datetime.now().strftime('%Y-%m-%d')}_k{K}_e5"
+RUN_NAME = f"faiss_eval_{datetime.now().strftime('%Y-%m-%d')}_k{K}_e5"
 LOG_DIR =  os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/faiss/logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_JSON = os.path.join(LOG_DIR, f"{RUN_NAME}.json")

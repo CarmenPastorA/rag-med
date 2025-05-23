@@ -1,4 +1,4 @@
-# Metric functions to evaluate FAISS retrieval performance
+# Unified metric functions for retriever evaluation
 
 def precision_at_k(retrieved, relevant):
     """Compute Precision@k: proportion of retrieved documents that are relevant"""

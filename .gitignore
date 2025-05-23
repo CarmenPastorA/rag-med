@@ -8,6 +8,8 @@ data/posteriori_resources/*
 models/*
 !models/README.md
 resource_builder/cimavet_processor.log
+tools/arqa/evaluation/bm25/logs/*
+tools/arqa/evaluation/faiss/logs/*
 
 venv/
 __pycache__/

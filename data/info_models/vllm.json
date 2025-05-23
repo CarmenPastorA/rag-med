@@ -1,0 +1,17 @@
+{
+  "mistral": {
+    "model_name": "mistralai/Mistral-7B-Instruct-v0.2",
+    "endpoint": "http://localhost:8000/v1",
+    "temperature": 0.3
+  },
+  "qwen2.5": {
+    "model_name": "huihui_ai/qwen2.5-1m-abliterated",
+    "endpoint": "http://localhost:8000/v1",
+    "temperature": 0.3
+  },
+  "llama3": {
+    "model_name": "meta-llama/Llama-3-8B-Instruct",
+    "endpoint": "http://localhost:8000/v1",
+    "temperature": 0.3
+  }
+}
