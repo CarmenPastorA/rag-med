@@ -1,89 +1,25 @@
-# === Path setup ===
+#grouping_utils.y
 import os
 import json
-import random
-from typing import List, Dict, Any, Set, Tuple
-from collections import defaultdict
-from pathlib import Path
+from typing import List, Dict, Any
+from collections import Counter
 
+# === Paths ===
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "../../../"))
 print(f"PROJECT ROOT: {PROJECT_ROOT}")
 
-# === Grouping Utilities ===
 def load_master_json(path: str) -> Dict[str, Any]:
     """
-    Load structured medication metadata from master_merge_for_llm.json.
+    Load structured medication metadata from a JSON file.
     """
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def extract_unique_values(master: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Extract unique values for species, indications, administration routes, antibiotic categories,
-    and build valid (species, indication) pairs.
-    """
-    especies, indicaciones, vias, categorias = set(), set(), set(), set()
-    especie_indicacion_pairs = set()
-
-    for entry in master.values():
-        especies.update(entry.get("especies", []))
-        vias.update(entry.get("ruta_administracion", []))
-
-        for especie, indic_list in entry.get("indicaciones", {}).items():
-            indicaciones.update(indic_list)
-            for indic in indic_list:
-                especie_indicacion_pairs.add((especie, indic))
-
-        ab = entry.get("antibiotico", [])
-        if isinstance(ab, list):
-            for a in ab:
-                if isinstance(a, dict):
-                    cat = a.get("Categoría")
-                    if cat:
-                        categorias.add(cat)
-
-    return {
-        "especie": especies,
-        "indicacion": indicaciones,
-        "via": vias,
-        "categoria_antibiotico": categorias,
-        "especie_indicacion_pairs": especie_indicacion_pairs
-    }
-
-def sample_groupings(possible_values: Dict[str, Any], n: int = 100) -> List[Dict[str, str]]:
-    """
-    Create n random valid groupings using combinations of available criteria.
-    If any field is None, it won't be filtered.
-    """
-    all_groupings = []
-    for _ in range(n):
-        especie = random.choice(list(possible_values["especie"]))
-        indicacion = random.choice(list(possible_values["indicacion"])) if possible_values["indicacion"] else None
-        via = random.choice(list(possible_values["via"])) if possible_values["via"] else None
-        categoria = random.choice(list(possible_values["categoria_antibiotico"])) if possible_values["categoria_antibiotico"] else None
-
-        criterios = [f"especie: {especie}"]
-        if indicacion: criterios.append(f"indicación: {indicacion}")
-        if via: criterios.append(f"vía: {via}")
-        if categoria: criterios.append(f"categoría: {categoria}")
-
-        descripcion = " para " + ", ".join(criterios)
-
-        grouping = {
-            "especie": especie,
-            "indicacion": indicacion,
-            "via": via,
-            "categoria_antibiotico": categoria,
-            "descripcion": descripcion
-        }
-        all_groupings.append(grouping)
-    return all_groupings
-
 def filter_documents(master: Dict[str, Any], criteria: Dict[str, Any]) -> List[str]:
     """
-    Filter all medication IDs that match the selected grouping criteria.
-    Supports flexible filtering: pass None to skip a criterion.
+    Filter all document IDs in the master dataset that match the given criteria.
+    Fields in the criteria dictionary may be set to None to disable filtering by that attribute.
     """
     result = []
     for doc_id, entry in master.items():
@@ -111,4 +47,55 @@ def filter_documents(master: Dict[str, Any], criteria: Dict[str, Any]) -> List[s
         result.append(doc_id)
     return result
 
+def extract_existing_groupings(master: Dict[str, Any], min_docs: int = 3) -> List[Dict[str, Any]]:
+    """
+    Extract all real (species, indication, route, antibiotic category) groupings that occur in the dataset,
+    and filter them by minimum number of matching documents.
+    Returns a list of dictionaries with grouping details and document count.
+    """
+    grouping_counter = Counter()
 
+    for doc_id, entry in master.items():
+        species = entry.get("especies", [])
+        routes = entry.get("ruta_administracion", [])
+        indications_dict = entry.get("indicaciones", {})
+        categories = set()
+
+        for ab in entry.get("antibiotico", []):
+            if isinstance(ab, dict):
+                cat = ab.get("Categoría")
+                if cat:
+                    categories.add(cat)
+
+        for sp in species:
+            indications = indications_dict.get(sp, []) or [None]
+            routes_iter = routes or [None]
+            categories_iter = categories or [None]
+
+            for ind in indications:
+                for route in routes_iter:
+                    for cat in categories_iter:
+                        grouping_counter[(sp, ind, route, cat)] += 1
+
+    # Filter groupings by min_docs
+    filtered = []
+    for (sp, ind, route, cat), count in grouping_counter.items():
+        if count >= min_docs:
+            filtered.append({
+                "especie": sp,
+                "indicacion": ind,
+                "via": route,
+                "categoria_antibiotico": cat,
+                "descripcion": " para " + ", ".join(
+                    f"{k} del antibiótico: {v}" if k == "categoría" and v else f"{k}: {v}"
+                    for k, v in {
+                        "especie": sp,
+                        "indicación": ind,
+                        "vía": route,
+                        "categoría": cat
+                    }.items() if v
+                ),
+                "num_docs": count
+            })
+
+    return filtered

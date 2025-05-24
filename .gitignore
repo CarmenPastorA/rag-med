@@ -10,6 +10,7 @@ models/*
 resource_builder/cimavet_processor.log
 tools/arqa/evaluation/bm25/logs/*
 tools/arqa/evaluation/faiss/logs/*
+tools/arqa/evaluation/generated_datasets/*
 
 venv/
 __pycache__/
