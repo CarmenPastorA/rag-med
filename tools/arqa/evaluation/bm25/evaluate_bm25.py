@@ -16,7 +16,7 @@ from shared import dunder_info
 dunder_info.inject_dunder(__name__)
 
 from tools.arqa.bm25_search import BM25Search
-from tools.arqa.evaluation.metrics import precision_at_k, recall_at_k, hit_at_k, mrr
+from tools.arqa.evaluation.metrics import precision_at_k, recall_at_k, hit_at_k, mrr, normalized_precision_at_k, n_relevant_retrieved
 
 # === Configuration ===
 K = 10
@@ -24,7 +24,7 @@ BM25_DIR = os.path.join(PROJECT_ROOT, "data/posteriori_resources/bm25_stuffs")
 FASTTEXT_PATH = os.path.join(PROJECT_ROOT, "models/lang_model")
 STOPWORDS_PATH = os.path.join(PROJECT_ROOT, "data/priori_resources/stopwords.txt")
 PRESERVE_WORDS_PATH = os.path.join(PROJECT_ROOT, "data/priori_resources/preserve_words.txt")
-DATASET_PATH = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/synthetic_validation_dataset.jsonl")
+DATASET_PATH = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/generated_datasets/structured_mistral_min3.jsonl")
 
 RUN_NAME = f"bm25_eval_{datetime.now().strftime('%Y-%m-%d')}_k{K}"
 LOG_DIR = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/bm25/logs")
@@ -47,7 +47,11 @@ with open(DATASET_PATH, "r", encoding="utf-8") as f:
 
 # === Per-query evaluation ===
 results = []
+
+# Filter out the 78 questions with 50+ retrieved documents (too general and not clinically relevant)
+#questions = [q for q in questions if len(q["relevant_doc_ids"]) <= 50]
 for q in questions:
+    query_id = q.get("id")
     query = q["question"]
     relevant_ids = q["relevant_doc_ids"]
 
@@ -56,13 +60,16 @@ for q in questions:
         retrieved_ids = [doc_id.replace("FT_", "").replace("_ESP", " ESP") for doc_id in retrieved_raw]
 
         results.append({
+            "id": query_id,
             "question": query,
             "relevant_doc_ids": relevant_ids,
             "retrieved_doc_ids": retrieved_ids,
             "precision@k": precision_at_k(retrieved_ids, relevant_ids),
             "recall@k": recall_at_k(retrieved_ids, relevant_ids),
             "hit@k": hit_at_k(retrieved_ids, relevant_ids),
-            "mrr": mrr(retrieved_ids, relevant_ids)
+            "mrr": mrr(retrieved_ids, relevant_ids),
+            "normalized_precision@k": normalized_precision_at_k(retrieved_ids, relevant_ids, k=K),
+            "n_relevant_retrieved": n_relevant_retrieved(retrieved_ids, relevant_ids)
         })
     except Exception as e:
         print(f"Error processing: {query}\n{e}")
@@ -70,14 +77,16 @@ for q in questions:
 # === Aggregate metrics ===
 summary = defaultdict(list)
 for r in results:
-    for m in ["precision@k", "recall@k", "hit@k", "mrr"]:
+    for m in ["precision@k", "recall@k", "hit@k", "mrr", "normalized_precision@k", "n_relevant_retrieved"]:
         summary[m].append(r[m])
 
 global_metrics = {
     "mean_precision@k": round(np.mean(summary["precision@k"]), 4),
+    "mean_normalized_precision@k": round(np.mean(summary["normalized_precision@k"]), 4),
     "mean_recall@k": round(np.mean(summary["recall@k"]), 4),
     "mean_hit@k": round(np.mean(summary["hit@k"]), 4),
     "mean_mrr": round(np.mean(summary["mrr"]), 4),
+    "mean_n_relevant_retrieved": round(np.mean(summary["n_relevant_retrieved"]), 2),
     "questions_evaluated": len(results),
     "k": K,
     "retriever": "BM25",
