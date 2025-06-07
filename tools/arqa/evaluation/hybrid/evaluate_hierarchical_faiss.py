@@ -98,7 +98,8 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
 
-    EMBEDDING_MODEL_PATH = "intfloat/multilingual-e5-large"
+    #EMBEDDING_MODEL_PATH = "intfloat/multilingual-e5-large"
+    EMBEDDING_MODEL_PATH = os.path.join(PROJECT_ROOT, "models/multilingual-e5-large-local")
     ESSENTIAL_INDEX = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_index.faiss")
     ESSENTIAL_MAP = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_mapping.json")
     CHUNKS_INDEX = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks_index.faiss")
