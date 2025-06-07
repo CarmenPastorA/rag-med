@@ -1,17 +1,13 @@
+"""evaluate_primary_faiss.py
+----------------------------
 
-"""evaluate_hierarchical_faiss.py
----------------------------------
+Evaluate only the **first** stage of the hierarchical FAISS retriever on a
+set of synthetic question/answer pairs.
 
-Evaluate the full hierarchical FAISS retriever on a set of synthetic
-question/answer pairs.
-
-This script loads both the essential-information index (document level)
-and the chunks index (subsection level). Each question is first used to
-retrieve candidate documents from the essential index, then relevant
-chunks are fetched from those documents. Metrics are computed using the
-unique document IDs from the retrieved chunks so that we can directly
-compare with other document-level evaluations.
-=======
+This script loads the essential-information FAISS index and measures how
+well it retrieves relevant documents without executing the second stage of
+chunk retrieval.  The goal is to assess the standalone performance of the
+primary (document-level) index.
 """
 
 import os
@@ -56,6 +52,8 @@ ESSENTIAL_MAPPING_PATH = os.path.join(
 ESSENTIAL_CACHE_PATH = os.path.join(
     PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_cache.json"
 )
+# Paths for the second-stage chunk index are kept for reference but not used in
+# this evaluation.  They can be enabled if chunk retrieval needs to be tested
 CHUNKS_INDEX_PATH = os.path.join(
     PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks_index.faiss"
 )
@@ -67,18 +65,36 @@ CHUNKS_CACHE_PATH = os.path.join(
 )
 
 parser = argparse.ArgumentParser(
-    description="Evaluate the hierarchical FAISS retriever"
+    description="Evaluate the primary (document-level) FAISS index"
 )
+parser.add_argument(
+    "--doc_top_n",
+    type=int,
+    default=10,
+    help="Number of documents retrieved from the essential index",
+)
+parser.add_argument(
+    "--device",
+    type=str,
+    default="cuda",
+    help="Device used for the embedding model (cpu or cuda)",
+)
+args = parser.parse_args()
 
+run_name = f"primary_faiss_k{args.doc_top_n}"
+LOG_JSON = os.path.join(LOG_DIR, f"{run_name}.json")
+LOG_MD = os.path.join(LOG_DIR, f"{run_name}.md")
+
+# Load retriever
 embedding_model = EmbeddingModel(EMBEDDING_MODEL_PATH, args.device, 512)
 retriever = HierarchicalFaissSearch(embedding_model, verbose=False)
-retriever.load_indices(
+
+# Only load the essential-information index.  This evaluation measures how
+# well the first retrieval stage works in isolation.
+retriever.load_essential_index(
     ESSENTIAL_INDEX_PATH,
     ESSENTIAL_MAPPING_PATH,
     ESSENTIAL_CACHE_PATH,
-    CHUNKS_INDEX_PATH,
-    CHUNKS_MAPPING_PATH,
-    CHUNKS_CACHE_PATH,
 )
 
 # Load questions
@@ -92,6 +108,12 @@ for q in questions:
     question = q["question"]
     expected_ids = [normalize_doc_id(doc) for doc in q["relevant_doc_ids"]]
 
+    # Retrieve only document identifiers from the essential index
+    retrieved_doc_ids = retriever.get_relevant_document_ids(
+        question, top_k=args.doc_top_n
+    )
+    retrieved_ids = [normalize_doc_id(doc_id) for doc_id in retrieved_doc_ids]
+
     results.append(
         {
             "id": qid,
@@ -103,7 +125,7 @@ for q in questions:
             "hit@k": hit_at_k(retrieved_ids, expected_ids),
             "mrr": mrr(retrieved_ids, expected_ids),
             "normalized_precision@k": normalized_precision_at_k(
-                retrieved_ids, expected_ids, k=args.chunk_top_k
+                retrieved_ids, expected_ids, k=args.doc_top_n
             ),
             "n_relevant_retrieved": n_relevant_retrieved(
                 retrieved_ids, expected_ids
@@ -137,7 +159,6 @@ global_metrics = {
     ),
     "questions_evaluated": len(results),
     "doc_top_n": args.doc_top_n,
-    "chunk_top_k": args.chunk_top_k,
     "device": args.device,
 }
 
@@ -147,10 +168,9 @@ with open(LOG_JSON, "w", encoding="utf-8") as f:
 
 # Save Markdown summary
 with open(LOG_MD, "w", encoding="utf-8") as f:
-    f.write(f"# Hierarchical FAISS Evaluation - {run_name}\n\n")
+    f.write(f"# Primary FAISS Evaluation - {run_name}\n\n")
     f.write("## Configuration\n")
     f.write(f"- Doc top-N: {args.doc_top_n}\n")
-    f.write(f"- Chunk top-K: {args.chunk_top_k}\n")
     f.write(f"- Device: {args.device}\n\n")
     f.write("## Global Results\n\n")
     for k, v in global_metrics.items():
@@ -161,7 +181,7 @@ with open(LOG_MD, "w", encoding="utf-8") as f:
         f.write(f"  - Relevant doc IDs: {r['relevant_doc_ids']}\n")
         f.write(f"  - Retrieved doc IDs: {r['retrieved_doc_ids']}\n")
         f.write(
-            f"  - P@{args.chunk_top_k}: {r['precision@k']}, R@{args.chunk_top_k}: {r['recall@k']}, MRR: {r['mrr']}\n\n"
+            f"  - P@{args.doc_top_n}: {r['precision@k']}, R@{args.doc_top_n}: {r['recall@k']}, MRR: {r['mrr']}\n\n"
         )
 
 print("\nEvaluation completed.")
