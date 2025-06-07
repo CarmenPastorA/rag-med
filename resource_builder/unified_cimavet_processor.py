@@ -13,7 +13,8 @@ It allows the following:
 5. Download PDFs (all or only new ones) of the SmPCs in parallel
 6. Convert the PDFs (all or only new ones) to Markdown in parallel
 7. Parse the PDFs (all or only new ones) with Markdown to generate JSON with a predefined structure
-8. Store the JSON information in FAISS
+8. Creates text files with essential information for each medicine
+9. Store the JSON information in FAISS
 
 The script is very flexible and allows you to skip any steps you want.
 """
@@ -56,7 +57,7 @@ logging.basicConfig(
 logger = logging.getLogger("CIMAVet-Processor")
 
 class CIMAVetProcessor:
-    def __init__(self, output_dir, num_workers=20, max_eu_workers=2, max_retries=3, max_empty_responses=30):
+    def __init__(self, output_dir, num_workers=20, max_eu_workers=2, max_retries=3, max_empty_responses=30, use_hierarchical_storage=True):
         """
         Initializes the CIMAVet processor
         
@@ -67,12 +68,14 @@ class CIMAVetProcessor:
             max_retries (int): Maximum retries for failed downloads
             max_empty_responses (int): Maximum number of consecutive empty responses, 
                                        in the 'registroCambios' service, to be considered as an error
+            use_hierarchical_storage (bool): Flag to enable/disable hierarchical storage
         """
         self.output_dir = output_dir
         self.num_workers = num_workers
         self.max_eu_workers = max_eu_workers
         self.max_retries = max_retries
         self.max_empty_responses = max_empty_responses
+        self.use_hierarchical_storage = use_hierarchical_storage
         self.pact_mapping = self._load_static_pact_mapping()
         
         # Create directory structure
@@ -80,9 +83,10 @@ class CIMAVetProcessor:
         self.pdf_dir = os.path.join(output_dir, "pdf_files")
         self.markdown_dir = os.path.join(output_dir, "markdown_files")
         self.processed_json_dir = os.path.join(output_dir, "processed_json")
+        self.essential_info_dir = os.path.join(output_dir, "essential_info")
         
         for directory in [self.output_dir, self.json_dir, self.pdf_dir, 
-                         self.markdown_dir, self.processed_json_dir]:
+                         self.markdown_dir, self.processed_json_dir, self.essential_info_dir]:
             os.makedirs(directory, exist_ok=True)
             
         # Create file paths
@@ -384,7 +388,7 @@ class CIMAVetProcessor:
         except Exception as e:
             logger.error(f"Error processing merged JSON: {str(e)}")
         
-        self.registration_numbers = [r for r in registration_numbers if not r.startswith("EU")] # skip EU reg numbers
+        #self.registration_numbers = [r for r in registration_numbers if not r.startswith("EU")] # skip EU reg numbers
         self.registration_numbers = registration_numbers
         logger.info(f"{len(registration_numbers)} registration numbers have been extracted")
         
@@ -870,7 +874,252 @@ class CIMAVetProcessor:
             logger.error(f"Error converting to JSON: {str(e)}")
             return False
     
-    # 8. Store the JSON information in FAISS
+    # 8. Creates text files with essential information for each medicine
+    def create_essential_info_files(self):
+        """
+        Creates text files with essential information for each medicine.
+        These files contain key metadata that can be used by a primary FAISS index
+        to filter relevant medications before detailed document search.
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        logger.info("Starting creation of essential information files...")
+        
+        try:
+            # Create directory for essential info files
+            self.essential_info_dir = os.path.join(self.output_dir, "essential_info")
+            os.makedirs(self.essential_info_dir, exist_ok=True)
+            
+            # If there are no registration numbers to process and it is a valid state, skip creation
+            if not self.registration_numbers:
+                if self.last_execution and self.consecutive_empty_responses < self.max_empty_responses:
+                    logger.info("No changes detected since last execution. Skipping essential info files creation.")
+                    return True
+            
+            # Determine which JSON files to process
+            if self.registration_numbers:
+                # Only process JSONs corresponding to updated registration numbers
+                json_files = []
+                for reg_number in self.registration_numbers:
+                    # Build the filename of the JSON file
+                    reg_for_url = format_registration_for_url(reg_number)
+                    json_file = f"FT_{reg_for_url.replace('+', '_').replace('@', '-')}.json"
+                    json_path = os.path.join(self.processed_json_dir, json_file)
+                    if os.path.exists(json_path):
+                        json_files.append(json_file)
+                
+                if not json_files:
+                    logger.warning("No JSON files found for the current registration numbers.")
+                    return True  # It's not an error, just that there are no files to process
+            else:
+                # If there are no specific registrations, process all JSON files
+                json_files = [f for f in os.listdir(self.processed_json_dir) if f.endswith('.json')]
+            
+            # If there are no JSON files to process, terminate
+            if not json_files:
+                logger.info("No JSON files to process for essential info creation.")
+                return True
+            
+            processed_count = 0
+            for json_file in tqdm(json_files, desc="Creating essential info files"):
+                json_path = os.path.join(self.processed_json_dir, json_file)
+                
+                try:
+                    # Load the JSON document
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        doc = json.load(f)
+                    
+                    # Create essential info text
+                    essential_text = self._create_essential_info_text(doc)
+                    
+                    # Save essential info to text file
+                    output_filename = os.path.splitext(json_file)[0] + ".txt"
+                    output_path = os.path.join(self.essential_info_dir, output_filename)
+                    
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write(essential_text)
+                    
+                    processed_count += 1
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to process {json_file}: {str(e)}")
+                    continue
+            
+            logger.info(f"Essential info files creation completed for {processed_count} files")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error creating essential info files: {str(e)}")
+            return False
+
+    def _create_essential_info_text(self, doc):
+        """
+        Creates essential information text from a document JSON.
+        This text contains key searchable information for primary filtering.
+        
+        Args:
+            doc (dict): Document JSON data
+            
+        Returns:
+            str: Essential information text
+        """
+        # Extract document ID
+        doc_id = doc.get('document_id', '')
+        
+        # Extract key metadata
+        med_name = doc.get('nombre_medicamento', '')
+        lab_titular = doc.get('laboratorio_titular', '')
+        fecha_autorizacion = doc.get('fecha_primera_autorizacion', '')
+        
+        # Process ATC codes
+        atc_info = []
+        for item in doc.get("codigos_atc", []):
+            codigo = item.get('codigo', '')
+            nombre = item.get('nombre', '')
+            nivel = item.get('nivel', '')
+            if codigo and nombre:
+                atc_info.append(f"{codigo}: {nombre} (Nivel {nivel})")
+        
+        atc_text = "Códigos ATC: " + "; ".join(atc_info) if atc_info else ""
+        
+        # Process species - use normalized names from especies_cimavet
+        species_cimavet = doc.get('especies_cimavet', [])
+        if species_cimavet:
+            target_species = []
+            for sp in species_cimavet:
+                nombre = sp.get('nombre', '')
+                nombre_normalizado = sp.get('nombre_normalizado', '')
+                
+                # If both names exist and are different (case-insensitive), show both
+                if nombre and nombre_normalizado and nombre.lower() != nombre_normalizado.lower():
+                    target_species.append(f"{nombre} ({nombre_normalizado})")
+                # Otherwise, use the normalized name, or the regular name if normalized doesn't exist
+                else:
+                    target_species.append(nombre_normalizado or nombre)
+            
+            species_text = "Especies: " + ", ".join(target_species)
+        else:
+            species_raw = doc.get('especies_destino', '')
+            species_text = f"Especies: {species_raw}" if species_raw else ""
+        
+        # Process active ingredients - both text and structured data
+        active_ingredients = doc.get('principios_activos', '')
+        active_ingredients_cimavet = doc.get('principios_activos_cimavet', [])
+        
+        if active_ingredients_cimavet:
+            active_list = []
+            for item in active_ingredients_cimavet:
+                nombre = item.get('nombre', '')
+                cantidad = item.get('cantidad', '')
+                unidad = item.get('unidad', '')
+                if nombre:
+                    if cantidad and unidad:
+                        active_list.append(f"{nombre} ({cantidad} {unidad})")
+                    else:
+                        active_list.append(nombre)
+            active_text = "Principios activos: " + "; ".join(active_list)
+        else:
+            active_text = f"Principios activos: {active_ingredients}" if active_ingredients else ""
+        
+        # Pharmaceutical form and administration
+        pharm_form = doc.get('forma_farmaceutica', '')
+        pharm_form_text = f"Forma farmacéutica: {pharm_form}" if pharm_form else ""
+        
+        # Administration routes
+        admin_routes = doc.get('vias_administracion', [])
+        if admin_routes:
+            routes_list = [route.get('nombre', '') for route in admin_routes if route.get('nombre')]
+            admin_routes_text = "Vías de administración: " + ", ".join(routes_list)
+        else:
+            admin_routes_text = ""
+        
+        # Antibiotic information
+        antibiotic = doc.get('antibiotico', False)
+        antibiotic_text = f"Antibiótico: {'Sí' if antibiotic else 'No'}"
+        
+        # Process indications by species (simplified)
+        indications = doc.get('indicaciones', [])
+        indication_list = []
+        if indications:
+            indications_by_species = {}
+            for indication in indications:
+                especie = indication.get('especie', {})
+                especie_name = especie.get('nombre_normalizado', especie.get('nombre', 'General'))
+                indication_name = indication.get('nombre', '')
+                if indication_name:
+                    if especie_name not in indications_by_species:
+                        indications_by_species[especie_name] = []
+                    indications_by_species[especie_name].append(indication_name)
+            
+            for especie, inds in indications_by_species.items():
+                indication_list.extend([f"{ind} ({especie})" for ind in inds])
+        
+        indications_text = "Indicaciones: " + "; ".join(indication_list) if indication_list else ""
+        
+        # Process contraindications (simplified)
+        contraindications = doc.get('contraindicaciones', [])
+        contra_list = []
+        contraindicated_species = []
+        
+        if contraindications:
+            for contra in contraindications:
+                if contra.get('es_especie', False):
+                    # This contraindication is itself a species
+                    species_name = contra.get('nombre_normalizado', contra.get('nombre', ''))
+                    if species_name:
+                        contraindicated_species.append(species_name)
+                else:
+                    contra_name = contra.get('nombre', '')
+                    if contra_name:
+                        if 'especie' in contra:
+                            especie = contra.get('especie', {})
+                            especie_name = especie.get('nombre_normalizado', especie.get('nombre', ''))
+                            contra_list.append(f"{contra_name} ({especie_name})")
+                        else:
+                            contra_list.append(contra_name)
+        
+        contraindications_text = ""
+        if contra_list:
+            contraindications_text = "Contraindicaciones: " + "; ".join(contra_list)
+        if contraindicated_species:
+            contraindicated_text = "No usar en: " + ", ".join(contraindicated_species)
+            if contraindications_text:
+                contraindications_text += ". " + contraindicated_text
+            else:
+                contraindications_text = contraindicated_text
+        
+        # Dispensing and administration conditions
+        dis_conditions = doc.get('condiciones_dispensacion', '')
+        dis_conditions_text = f"Dispensación: {dis_conditions}" if dis_conditions else ""
+        
+        admin_conditions = doc.get('condiciones_administracion', '')
+        admin_conditions_text = f"Administración: {admin_conditions}" if admin_conditions else ""
+        
+        # Build the essential info text
+        essential_parts = [
+            f"ID: {doc_id}",
+            f"Medicamento: {med_name}",
+            f"Laboratorio: {lab_titular}",
+            f"Autorización: {fecha_autorizacion}",
+            species_text,
+            atc_text,
+            active_text,
+            pharm_form_text,
+            admin_routes_text,
+            antibiotic_text,
+            indications_text,
+            contraindications_text,
+            dis_conditions_text,
+            admin_conditions_text
+        ]
+        
+        # Filter out empty parts and join
+        essential_text = "\n".join([part for part in essential_parts if part.strip()])
+        
+        return essential_text
+    
+    # 9. Store the JSON information in FAISS
     def store_in_faiss(self):
         """Stores the content of the JSONs in FAISS"""
         logger.info("Starting storage at FAISS...")
@@ -883,21 +1132,49 @@ class CIMAVetProcessor:
             
             # Import from shared modules
             from shared.veterinary_utils.embedding_model import EmbeddingModel
-            from resource_builder.scripts.faiss_storage import FaissStorage
+            
+            if self.use_hierarchical_storage:
+                from resource_builder.scripts.faiss_storage import HierarchicalFaissStorage
+            else:
+                from resource_builder.scripts.faiss_storage import FaissStorage
             
             # Paths for files
-            #model_path = os.path.join(project_root, "models/similarity_model")
-            model_path = "intfloat/multilingual-e5-large"
+            model_path = os.path.join(project_root, "models/multilingual-e5-large-local")
+            #model_path = "intfloat/multilingual-e5-large"
             json_dir = os.path.join(project_root, "data/posteriori_resources/processed_json")
-            faiss_index_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/index.faiss")
-            mapping_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/mapping.json")
-            chunks_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/chunks.json")
+            essential_info_dir = os.path.join(project_root, "data/posteriori_resources/essential_info")
             
-            # If a valid index exists and there are no changes, skip storing
-            if os.path.exists(faiss_index_path) and os.path.getsize(faiss_index_path) > 0 and not self.registration_numbers:
-                if self.last_execution and self.consecutive_empty_responses < self.max_empty_responses:
-                    logger.info("No changes detected since last execution. Skipping FAISS storage.")
-                    return True
+            if self.use_hierarchical_storage:
+                # Paths for hierarchical storage
+                essential_index_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/essential_index.faiss")
+                essential_mapping_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/essential_mapping.json")
+                essential_cache_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/essential_cache.json")
+                
+                chunks_index_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/chunks_index.faiss")
+                chunks_mapping_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/chunks_mapping.json")
+                chunks_cache_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/chunks_cache.json")
+                
+                # Check if hierarchical indices exist and are valid
+                hierarchical_indices_exist = (
+                    os.path.exists(essential_index_path) and os.path.getsize(essential_index_path) > 0 and
+                    os.path.exists(chunks_index_path) and os.path.getsize(chunks_index_path) > 0
+                )
+                
+                if hierarchical_indices_exist and not self.registration_numbers:
+                    if self.last_execution and self.consecutive_empty_responses < self.max_empty_responses:
+                        logger.info("No changes detected since last execution. Skipping hierarchical FAISS storage.")
+                        return True
+            else:
+                # Traditional single-index paths
+                faiss_index_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/index.faiss")
+                mapping_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/mapping.json")
+                chunks_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/chunks.json")
+                
+                # Check if traditional index exists and is valid
+                if os.path.exists(faiss_index_path) and os.path.getsize(faiss_index_path) > 0 and not self.registration_numbers:
+                    if self.last_execution and self.consecutive_empty_responses < self.max_empty_responses:
+                        logger.info("No changes detected since last execution. Skipping traditional FAISS storage.")
+                        return True
             
             # Initialize embedding model
             embedding_model = EmbeddingModel(
@@ -906,20 +1183,54 @@ class CIMAVetProcessor:
                 512
             )
             
-            # Initialize FAISS Storage
-            storage_emb = FaissStorage(
-                embedding_model,
-                embedding_dim=embedding_model.get_word_embedding_dimension()
-            )
+            if self.use_hierarchical_storage:
+                logger.info("Using hierarchical FAISS storage (two-stage retrieval)...")
+                
+                # Check if essential_info directory exists
+                if not os.path.exists(essential_info_dir):
+                    logger.warning(f"Essential info directory not found: {essential_info_dir}")
+                    logger.warning("Creating empty directory. Please populate with essential info files.")
+                    os.makedirs(essential_info_dir, exist_ok=True)
+                
+                # Initialize Hierarchical FAISS Storage
+                storage_emb = HierarchicalFaissStorage(
+                    embedding_model,
+                    embedding_dim=embedding_model.get_word_embedding_dimension()
+                )
+                
+                # Add ALL documents to both indices
+                storage_emb.add_documents_from_directory(json_dir, essential_info_dir)
+                
+                # Save both indices and their associated data
+                storage_emb.save_indices(
+                    essential_index_path, essential_mapping_path, essential_cache_path,
+                    chunks_index_path, chunks_mapping_path, chunks_cache_path
+                )
+                
+                logger.info("Hierarchical FAISS storage completed successfully")
+                logger.info(f"Essential info index: {storage_emb.essential_index.ntotal} documents")
+                logger.info(f"Chunks index: {storage_emb.chunks_index.ntotal} chunks")
+                
+            else:
+                logger.info("Using traditional FAISS storage (single-stage retrieval)...")
+                
+                # Initialize traditional FAISS Storage
+                storage_emb = FaissStorage(
+                    embedding_model,
+                    embedding_dim=embedding_model.get_word_embedding_dimension()
+                )
+                
+                # Add ALL documents
+                storage_emb.add_documents_from_directory(json_dir)
+                
+                # Save index and chunks cache
+                storage_emb.save_index(faiss_index_path, mapping_path, chunks_path)
+                
+                logger.info("Traditional FAISS storage completed successfully")
+                logger.info(f"Index contains: {storage_emb.index.ntotal} chunks")
             
-            # Add ALL documents
-            storage_emb.add_documents_from_directory(json_dir)
-            
-            # Save index and chunks cache
-            storage_emb.save_index(faiss_index_path, mapping_path, chunks_path)
-            
-            logger.info(f"Storage in FAISS completed")
             return True
+            
         except Exception as e:
             logger.error(f"Error in storage in FAISS: {str(e)}")
             return False
@@ -956,6 +1267,7 @@ class CIMAVetProcessor:
             ("Download PDFs", self.download_pdfs),
             ("Converting to markdown", self.convert_to_markdown),
             ("Parsing to JSON", self.parse_markdown_to_json),
+            ("Create essential info files", self.create_essential_info_files),
             ("Storage in FAISS", self.store_in_faiss)
         ]
         
@@ -992,6 +1304,8 @@ def main():
                         help='Skip conversion to markdown')
     parser.add_argument('--skip-json-parsing', action='store_true',
                         help='Skip parsing to JSON')
+    parser.add_argument('--skip-essential-info', action='store_true',
+                        help='Skip creation of essential info files')
     parser.add_argument('--skip-faiss', action='store_true',
                         help='Skip storage in FAISS')
     
@@ -1035,6 +1349,9 @@ def main():
     
     if not args.skip_json_parsing:
         processor.parse_markdown_to_json()
+    
+    if not args.skip_essential_info:
+        processor.create_essential_info_files()
     
     if not args.skip_faiss:
         processor.store_in_faiss()
