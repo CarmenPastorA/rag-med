@@ -1,3 +1,4 @@
+
 """evaluate_hierarchical_faiss.py
 ---------------------------------
 
@@ -10,6 +11,7 @@ retrieve candidate documents from the essential index, then relevant
 chunks are fetched from those documents. Metrics are computed using the
 unique document IDs from the retrieved chunks so that we can directly
 compare with other document-level evaluations.
+=======
 """
 
 import os
@@ -67,31 +69,7 @@ CHUNKS_CACHE_PATH = os.path.join(
 parser = argparse.ArgumentParser(
     description="Evaluate the hierarchical FAISS retriever"
 )
-parser.add_argument(
-    "--doc_top_n",
-    type=int,
-    default=10,
-    help="Number of documents retrieved in the first stage",
-)
-parser.add_argument(
-    "--chunk_top_k",
-    type=int,
-    default=20,
-    help="Number of chunks retrieved from the second stage",
-)
-parser.add_argument(
-    "--device",
-    type=str,
-    default="cuda",
-    help="Device used for the embedding model (cpu or cuda)",
-)
-args = parser.parse_args()
 
-run_name = f"hierarchical_faiss_doc{args.doc_top_n}_chunk{args.chunk_top_k}"
-LOG_JSON = os.path.join(LOG_DIR, f"{run_name}.json")
-LOG_MD = os.path.join(LOG_DIR, f"{run_name}.md")
-
-# Load retriever with both indices
 embedding_model = EmbeddingModel(EMBEDDING_MODEL_PATH, args.device, 512)
 retriever = HierarchicalFaissSearch(embedding_model, verbose=False)
 retriever.load_indices(
@@ -113,20 +91,6 @@ for q in questions:
     qid = q["id"]
     question = q["question"]
     expected_ids = [normalize_doc_id(doc) for doc in q["relevant_doc_ids"]]
-
-    # Perform hierarchical search: documents then chunks
-    retrieved_chunks = retriever.hierarchical_search(
-        question, top_documents=args.doc_top_n, top_chunks=args.chunk_top_k
-    )
-
-    # Extract unique document IDs from retrieved chunks in order
-    retrieved_ids = []
-    for chunk in retrieved_chunks:
-        doc_id = normalize_doc_id(chunk["metadata"]["document_id"])
-        if doc_id not in retrieved_ids:
-            retrieved_ids.append(doc_id)
-        if len(retrieved_ids) >= args.chunk_top_k:
-            break
 
     results.append(
         {
