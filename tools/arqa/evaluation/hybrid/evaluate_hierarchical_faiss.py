@@ -1,11 +1,9 @@
 import os
 import sys
 import json
-from datetime import datetime
 from collections import defaultdict
 import argparse
 import numpy as np
-import faiss
 
 # === Setup paths ===
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -13,6 +11,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "../../../../"))
 sys.path.append(PROJECT_ROOT)
 
 from shared.veterinary_utils.embedding_model import EmbeddingModel
+from tools.arqa.faiss_search import FaissSearch
 from tools.arqa.evaluation.metrics import (
     precision_at_k,
     recall_at_k,
@@ -23,91 +22,67 @@ from tools.arqa.evaluation.metrics import (
 )
 
 
-def load_mapping(path):
-    """Load a JSON mapping using integer keys."""
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return {int(k): v for k, v in data.items()}
+def search_chunks(query: str, faiss_search: FaissSearch, top_k: int) -> list[dict]:
+    """Retrieve chunks using the ``FaissSearch`` helper.
+
+    Args:
+        query: User question to embed and search.
+        faiss_search: Initialized search object with a loaded index.
+        top_k: Number of chunks to retrieve.
+
+    Returns:
+        List of chunk dictionaries as returned by ``FaissSearch.search``.
+    """
+
+    return faiss_search.search(query=query, k=top_k)
 
 
-def hierarchical_search(query, embedding_model, top_docs, top_chunks,
-                        essential_index, essential_map, chunks_index,
-                        chunks_map, chunks_cache):
-    """Two stage FAISS search using essential info then subsections."""
-    # Embed query
-    query_emb = embedding_model.get_embeddings(
-        [query], convert_to_numpy=True, normalize_embeddings=True
-    )
+def unique_doc_ids(results: list[dict], limit: int) -> list[str]:
+    """Get a list of unique document identifiers from ranked chunks.
 
-    # --- Stage 1: document retrieval ---
-    doc_limit = min(top_docs, essential_index.ntotal)
-    doc_scores, doc_indices = essential_index.search(query_emb, doc_limit)
-    doc_ids = []
-    for idx in doc_indices[0]:
-        info = essential_map.get(int(idx))
-        if info:
-            doc_ids.append(info.get("document_id"))
-    doc_set = set(doc_ids)
+    Args:
+        results: List of chunk dictionaries returned by ``FaissSearch``.
+        limit: Maximum number of unique document ids to return.
 
-    if not doc_ids:
-        return []
+    Returns:
+        Ordered list of unique document ids found in ``results``.
+    """
 
-    # --- Stage 2: chunk retrieval filtered by document id ---
-    search_k = min(top_chunks * len(doc_ids) * 2, chunks_index.ntotal)
-    chunk_scores, chunk_indices = chunks_index.search(query_emb, search_k)
-
-    results = []
-    for score, idx in zip(chunk_scores[0], chunk_indices[0]):
-        info = chunks_map.get(int(idx))
-        if not info:
-            continue
-        doc_id = info["metadata"].get("document_id")
-        if doc_id in doc_set:
-            chunk_id = info.get("chunk_id")
-            text = chunks_cache.get(chunk_id, {}).get("text", "")
-            results.append({
-                "doc_id": doc_id,
-                "chunk_id": chunk_id,
-                "score": float(score),
-                "text": text,
-            })
-            if len(results) >= top_chunks:
-                break
-    return results
-
-
-def unique_doc_ids(results, limit):
-    """Extract unique document ids from ranked chunk results."""
     seen = set()
-    ordered = []
+    ordered: list[str] = []
     for r in results:
-        d = r["doc_id"]
-        if d not in seen:
-            seen.add(d)
-            ordered.append(d)
+        doc_id = r["metadata"].get("document_id", r.get("chunk_id", "").split("@")[0])
+        if doc_id not in seen:
+            seen.add(doc_id)
+            ordered.append(doc_id)
         if len(ordered) >= limit:
             break
     return ordered
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate hierarchical FAISS retriever")
-    parser.add_argument("--top_docs", type=int, default=10, help="Top documents from essential stage")
-    parser.add_argument("--top_chunks", type=int, default=50, help="Top chunks from subsection stage")
-    parser.add_argument("--final_top_k", type=int, default=50, help="Number of unique documents used for metrics")
+    parser = argparse.ArgumentParser(
+        description="Evaluate the FAISS retriever using the new helper class"
+    )
+    # Number of chunks retrieved from the FAISS index for each query
+    parser.add_argument("--top_k", type=int, default=50,
+                        help="Number of chunks returned by the search")
+    # Number of unique documents considered when computing metrics
+    parser.add_argument("--final_top_k", type=int, default=50,
+                        help="Unique documents used for evaluation")
+    # Device where the embedding model will run (e.g. 'cuda' or 'cpu')
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
 
     #EMBEDDING_MODEL_PATH = "intfloat/multilingual-e5-large"
     EMBEDDING_MODEL_PATH = os.path.join(PROJECT_ROOT, "models/multilingual-e5-large-local")
-    ESSENTIAL_INDEX = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_index.faiss")
-    ESSENTIAL_MAP = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_mapping.json")
-    CHUNKS_INDEX = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks_index.faiss")
-    CHUNKS_MAP = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks_mapping.json")
-    CHUNKS_CACHE = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks_cache.json")
+    INDEX_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/index.faiss")
+    MAPPING_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/mapping.json")
+    CHUNKS_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks.json")
+    DOCS_DIR = os.path.join(PROJECT_ROOT, "data/posteriori_resources/processed_json")
     QUESTIONS_PATH = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/generated_datasets/structured_mistral_min3.jsonl")
 
-    run_name = f"hierarchical_faiss_eval_k{args.final_top_k}"
+    run_name = f"faiss_eval_k{args.final_top_k}"
     LOG_DIR = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/hybrid/logs")
     os.makedirs(LOG_DIR, exist_ok=True)
     LOG_JSON = os.path.join(LOG_DIR, f"{run_name}.json")
@@ -116,13 +91,13 @@ if __name__ == "__main__":
     # --- Load resources ---
     embedding_model = EmbeddingModel(EMBEDDING_MODEL_PATH, args.device, 512)
 
-    essential_index = faiss.read_index(ESSENTIAL_INDEX)
-    essential_map = load_mapping(ESSENTIAL_MAP)
-
-    chunks_index = faiss.read_index(CHUNKS_INDEX)
-    chunks_map = load_mapping(CHUNKS_MAP)
-    with open(CHUNKS_CACHE, "r", encoding="utf-8") as f:
-        chunks_cache = json.load(f)
+    faiss_search = FaissSearch(embedding_model)
+    faiss_search.load_index(
+        index_path=INDEX_PATH,
+        mapping_path=MAPPING_PATH,
+        chunks_path=CHUNKS_PATH,
+        documents_directory=DOCS_DIR,
+    )
 
     # --- Load evaluation questions ---
     with open(QUESTIONS_PATH, "r", encoding="utf-8") as f:
@@ -134,17 +109,7 @@ if __name__ == "__main__":
         query = q["question"]
         relevant_ids = q["relevant_doc_ids"]
 
-        chunk_results = hierarchical_search(
-            query,
-            embedding_model,
-            args.top_docs,
-            args.top_chunks,
-            essential_index,
-            essential_map,
-            chunks_index,
-            chunks_map,
-            chunks_cache,
-        )
+        chunk_results = search_chunks(query, faiss_search, args.top_k)
         retrieved_ids = unique_doc_ids(chunk_results, args.final_top_k)
 
         results.append({
@@ -173,8 +138,7 @@ if __name__ == "__main__":
         "mean_mrr": round(np.mean(summary["mrr"]), 4),
         "mean_n_relevant_retrieved": round(np.mean(summary["n_relevant_retrieved"]), 2),
         "questions_evaluated": len(results),
-        "top_docs": args.top_docs,
-        "top_chunks": args.top_chunks,
+        "top_k": args.top_k,
         "final_top_k": args.final_top_k,
         "device": args.device,
     }
@@ -183,10 +147,9 @@ if __name__ == "__main__":
         json.dump({"summary": global_metrics, "results": results}, f, indent=2, ensure_ascii=False)
 
     with open(LOG_MD, "w", encoding="utf-8") as f:
-        f.write(f"# Hierarchical FAISS Evaluation - {run_name}\n\n")
+        f.write(f"# FAISS Evaluation - {run_name}\n\n")
         f.write("## Configuration\n")
-        f.write(f"- Top documents: {args.top_docs}\n")
-        f.write(f"- Top chunks: {args.top_chunks}\n")
+        f.write(f"- Chunks retrieved: {args.top_k}\n")
         f.write(f"- Final top-K: {args.final_top_k}\n")
         f.write(f"- Device: {args.device}\n\n")
         f.write("## Global Metrics\n")
