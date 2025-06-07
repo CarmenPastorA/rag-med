@@ -11,9 +11,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from shared import dunder_info
 dunder_info.inject_dunder(__name__) # injects the variables
 
-def normalize_doc_id(doc_id: str) -> str:
-    return doc_id.replace("FT_", "").replace("_", " ").strip()
-
 def get_text(input_file):
     with open(input_file, "r", encoding="utf8") as document:
         text = document.read()
@@ -29,10 +26,28 @@ def vprint(string, verbose):
     if (verbose):
         print(string)
 
-def get_dict_from_json(filename):
+def get_dict_from_json(filename_or_str):
+    """
+    Load a dictionary from a JSON file path or a JSON string.
+    
+    Args:
+        filename_or_str (str): Path to a JSON file or a JSON-formatted string.
+    
+    Returns:
+        dict: Parsed JSON content as a dictionary.
+    
+    Raises:
+        ValueError: If the input is not a valid path or JSON string.
+    """
+    import os
     import json
-    with open(filename, encoding='utf8') as f_in:
-        return(json.load(f_in))
+    if os.path.exists(filename_or_str) and os.path.isfile(filename_or_str):
+        with open(filename_or_str, encoding='utf8') as fp:
+            return json.load(fp)
+    try:
+        return json.loads(filename_or_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON string or file path: {e}")
 
 # Turn a Unicode string to plain ASCII
 def unicodeToAscii(s, all_letters):
@@ -519,6 +534,30 @@ def format_registration_number(filename):
     # Replace underscore with space for other cases
     return filename.replace("_", " ")
 
+def regnum2filename(identifier: str, extension: str = ".txt") -> str:
+    """
+    Converts a SmPC registration number to a standardized filename.
+    
+    - Replaces spaces with underscores.
+    - Replaces slashes "/" with hyphens.
+    - Adds a "FT_" prefix.
+    - Appends the provided file extension (default is ".txt").
+    
+    Args:
+        identifier (str): The SmPC registration number (e.g., "1004 ESP" or "EU/2/99/011/001").
+        extension (str): The file extension to append (e.g., ".json", ".txt").
+    
+    Returns:
+        str: A filename string based on the identifier (e.g., "FT_1004_ESP.txt").
+    """
+    # Replace spaces and slashes with appropriate characters
+    normalized = identifier.replace(" ", "_").replace("/", "-")
+    
+    # Prefix with "FT_" and append extension
+    filename = f"FT_{normalized}{extension}"
+    
+    return filename
+
 def remove_accents(text: str) -> str:
     """
     Remove accents and diacritical marks from text.
@@ -551,6 +590,23 @@ def remove_accents(text: str) -> str:
 
 
 
+def parse_str_dict(value):
+    """
+    Convert string into a dict with str values
+    Valid as function for ConfigParse
+    """
+    import ast
+    try:
+        # Converts the string to a literal dictionary
+        parsed_dict = ast.literal_eval(value)
+        
+        # Ensures that the result is a dictionary with str values
+        if isinstance(parsed_dict, dict) and all(isinstance(v, str) for v in parsed_dict.values()):
+            return parsed_dict
+        else:
+            raise ValueError("The dictionary format is invalid or contains non-string values.")
+    except (ValueError, SyntaxError):
+        raise ValueError(f"The value '{value}' is not a valid string dictionary.")
 
 
 

@@ -1,8 +1,7 @@
 
 
-
 """
-FAISS search module for veterinary medicine RAG system.
+Hierarchical FAISS search module for veterinary medicine RAG system.
 Handles FAISS index loading and querying.
 
 Currently, to use FAISS with Numpy, 
@@ -10,314 +9,570 @@ the Numpy version must be lower than 2: pip install 'numpy<2.0.0'
 https://github.com/facebookresearch/faiss/issues/3526
 """
 
-
 import json
 import os
 import faiss
 import numpy as np
-from typing import List, Dict, Any, Tuple, Optional, Union
+from typing import List, Dict, Any, Tuple, Optional, Union, Set
 import sys
 
 # Add parent directory to path to access shared modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from shared import dunder_info
+from shared.veterinary_utils.utils import vprint
 from shared.veterinary_utils.embedding_model import EmbeddingModel
-dunder_info.inject_dunder(__name__) # injects the variables
+dunder_info.inject_dunder(__name__)  # injects the variables
 
-class FaissSearch:
+
+class HierarchicalFaissSearch:
     """
-    FAISS search system for veterinary medicine SmPCs.
-    Loads FAISS index and provides search functionality.
+    Hierarchical FAISS search system for veterinary medicine SmPCs.
+    
+    This class handles searching through previously stored FAISS indices using
+    a two-stage retrieval approach:
+    1. First stage: Retrieves relevant documents based on essential information
+    2. Second stage: Retrieves specific chunks from the relevant documents
+    
+    The class loads pre-built FAISS indices and their associated mappings to
+    perform efficient similarity searches.
     """
     
-    def __init__(self, embedding_model: EmbeddingModel, separator: str = "@"):
+    def __init__(self, embedding_model: EmbeddingModel, separator: str = "@", verbose: bool = True):
         """
-        Initializes the FAISS search system.
+        Initialize the hierarchical FAISS search system.
         
         Args:
             embedding_model: Model to generate embeddings with get_embeddings method
-            separator: Separator used in chunk identifiers
+            separator: Separator used in chunk identifiers (must match the one used during storage)
+            verbose: Enable verbose output for debugging and monitoring
         """
         self.embedding_model = embedding_model
         self.separator = separator
+        self.verbose = verbose
         
-        # FAISS index (will be loaded)
-        self.index = None
+        # First stage: Essential info index for document-level retrieval
+        self.essential_index = None
+        self.essential_id_to_info = {}  # Maps FAISS ID to document info
+        self.essential_cache = {}  # Cache of essential info texts
         
-        # Mappings for retrieval
-        self.id_to_embedding_info = {}  # Mapping from FAISS ID to embedding information
-        self.document_cache = {}  # Cache of complete documents (optional)
+        # Second stage: Detailed chunks index for chunk-level retrieval
+        self.chunks_index = None
+        self.chunks_id_to_info = {}  # Maps FAISS ID to chunk info
         self.chunks_cache = {}  # Cache of chunks with their text and metadata
+        
+        # Status flags
+        self.essential_index_loaded = False
+        self.chunks_index_loaded = False
     
-    def load_index(self, index_path: str, mapping_path: str, chunks_path: str = None, 
-                   documents_directory: str = None) -> None:
+    def load_essential_index(self, essential_index_path: str, essential_mapping_path: str, 
+                           essential_cache_path: str) -> None:
         """
-        Loads a FAISS index and mapping information.
+        Load the essential information index and its associated data.
+        
+        This loads the first-stage index used for document-level retrieval based on
+        essential information like medication name, laboratory, target species, etc.
         
         Args:
-            index_path: Path to the index
-            mapping_path: Path to the mapping
-            chunks_path: Optional path to the chunks cache
-            documents_directory: Optional path to load full documents
+            essential_index_path: Path to the essential info FAISS index file
+            essential_mapping_path: Path to the JSON file containing FAISS ID to document info mapping
+            essential_cache_path: Path to the JSON file containing cached essential info texts
+            
+        Raises:
+            FileNotFoundError: If any of the required files cannot be found
+            ValueError: If the loaded data is invalid or corrupted
         """
-        # Load FAISS index
-        self.index = faiss.read_index(index_path)
+        try:
+            # Load FAISS index
+            if not os.path.exists(essential_index_path):
+                raise FileNotFoundError(f"Essential index file not found: {essential_index_path}")
+            
+            self.essential_index = faiss.read_index(essential_index_path)
+            
+            # Load ID to info mapping
+            if not os.path.exists(essential_mapping_path):
+                raise FileNotFoundError(f"Essential mapping file not found: {essential_mapping_path}")
+            
+            with open(essential_mapping_path, 'r', encoding='utf-8') as f:
+                mapping_data = json.load(f)
+                # Convert string keys back to integers
+                self.essential_id_to_info = {int(k): v for k, v in mapping_data.items()}
+            
+            # Load essential info cache
+            if not os.path.exists(essential_cache_path):
+                raise FileNotFoundError(f"Essential cache file not found: {essential_cache_path}")
+            
+            with open(essential_cache_path, 'r', encoding='utf-8') as f:
+                self.essential_cache = json.load(f)
+            
+            self.essential_index_loaded = True
+            
+            vprint(f"Essential index loaded successfully:", self.verbose)
+            vprint(f"  - Index size: {self.essential_index.ntotal} documents", self.verbose)
+            vprint(f"  - Mapping entries: {len(self.essential_id_to_info)}", self.verbose)
+            vprint(f"  - Cache entries: {len(self.essential_cache)}", self.verbose)
+                
+        except Exception as e:
+            self.essential_index_loaded = False
+            raise ValueError(f"Failed to load essential index: {str(e)}")
+    
+    def load_chunks_index(self, chunks_index_path: str, chunks_mapping_path: str, 
+                         chunks_cache_path: str) -> None:
+        """
+        Load the chunks index and its associated data.
         
-        # Load mapping
-        with open(mapping_path, 'r', encoding='utf-8') as f:
-            # Convert keys from string to int during loading
-            mapping_data = json.load(f)
-            self.id_to_embedding_info = {int(k): v for k, v in mapping_data.items()}
+        This loads the second-stage index used for chunk-level retrieval from
+        specific sections and subsections of the documents.
         
-        # Optionally load chunks cache
-        if chunks_path and os.path.exists(chunks_path):
-            with open(chunks_path, 'r', encoding='utf-8') as f:
+        Args:
+            chunks_index_path: Path to the chunks FAISS index file
+            chunks_mapping_path: Path to the JSON file containing FAISS ID to chunk info mapping
+            chunks_cache_path: Path to the JSON file containing cached chunk texts and metadata
+            
+        Raises:
+            FileNotFoundError: If any of the required files cannot be found
+            ValueError: If the loaded data is invalid or corrupted
+        """
+        try:
+            # Load FAISS index
+            if not os.path.exists(chunks_index_path):
+                raise FileNotFoundError(f"Chunks index file not found: {chunks_index_path}")
+            
+            self.chunks_index = faiss.read_index(chunks_index_path)
+            
+            # Load ID to info mapping
+            if not os.path.exists(chunks_mapping_path):
+                raise FileNotFoundError(f"Chunks mapping file not found: {chunks_mapping_path}")
+            
+            with open(chunks_mapping_path, 'r', encoding='utf-8') as f:
+                mapping_data = json.load(f)
+                # Convert string keys back to integers
+                self.chunks_id_to_info = {int(k): v for k, v in mapping_data.items()}
+            
+            # Load chunks cache
+            if not os.path.exists(chunks_cache_path):
+                raise FileNotFoundError(f"Chunks cache file not found: {chunks_cache_path}")
+            
+            with open(chunks_cache_path, 'r', encoding='utf-8') as f:
                 self.chunks_cache = json.load(f)
+            
+            self.chunks_index_loaded = True
+            
+            vprint(f"Chunks index loaded successfully:", self.verbose)
+            vprint(f"  - Index size: {self.chunks_index.ntotal} chunks", self.verbose)
+            vprint(f"  - Mapping entries: {len(self.chunks_id_to_info)}", self.verbose)
+            vprint(f"  - Cache entries: {len(self.chunks_cache)}", self.verbose)
         
-        # Optionally load full documents
-        if documents_directory and os.path.exists(documents_directory):
-            for filename in os.listdir(documents_directory):
-                if filename.endswith('.json'):
-                    json_path = os.path.join(documents_directory, filename)
-                    with open(json_path, 'r', encoding='utf-8') as f:
-                        doc = json.load(f)
-                        doc_id = doc.get('document_id', filename.split('.')[0])
-                        self.document_cache[doc_id] = doc
+        except Exception as e:
+            self.chunks_index_loaded = False
+            raise ValueError(f"Failed to load chunks index: {str(e)}")
     
-    def search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+    def load_indices(self, essential_index_path: str, essential_mapping_path: str, essential_cache_path: str,
+                    chunks_index_path: str, chunks_mapping_path: str, chunks_cache_path: str) -> None:
         """
-        Searches for the k most relevant fragments for the query.
+        Load both essential and chunks indices in one call.
+        
+        This is a convenience method that loads both indices required for hierarchical search.
         
         Args:
-            query: User query
-            k: Number of results to retrieve
+            essential_index_path: Path to the essential info FAISS index file
+            essential_mapping_path: Path to the essential info mapping JSON file
+            essential_cache_path: Path to the essential info cache JSON file
+            chunks_index_path: Path to the chunks FAISS index file
+            chunks_mapping_path: Path to the chunks mapping JSON file
+            chunks_cache_path: Path to the chunks cache JSON file
+        """
+        self.load_essential_index(essential_index_path, essential_mapping_path, essential_cache_path)
+        self.load_chunks_index(chunks_index_path, chunks_mapping_path, chunks_cache_path)
+    
+    def get_relevant_document_ids(self, query: str, top_k: int = 10) -> List[str]:
+        """
+        First stage: Retrieve relevant document IDs based on essential information.
+        
+        This method searches through the essential information index to find documents
+        that are most relevant to the query based on high-level document characteristics
+        like medication name, target species, active ingredients, etc.
+        
+        Args:
+            query: Search query string
+            top_k: Number of top documents to retrieve
             
         Returns:
-            List of dictionaries with retrieved fragments and their information
-        """
-        if self.index is None:
-            raise ValueError("Index not loaded. Call load_index() first.")
+            List of relevant document IDs ordered by relevance score
             
+        Raises:
+            RuntimeError: If the essential index is not loaded
+        """
+        if not self.essential_index_loaded:
+            raise RuntimeError("Essential index not loaded. Call load_essential_index() first.")
+        
+        if self.essential_index.ntotal == 0:
+            vprint("Warning: Essential index is empty", self.verbose)
+            return []
+        
         # Generate embedding for the query
         query_embedding = self.embedding_model.get_embeddings(
             [query], 
+            batch_size=1,
             convert_to_numpy=True,
             normalize_embeddings=True
         )
         
-        # Search in the index
-        scores, indices = self.index.search(query_embedding, k)
+        # Search in essential info index
+        actual_k = min(top_k, self.essential_index.ntotal)
+        scores, indices = self.essential_index.search(query_embedding, actual_k)
         
-        results = []
-        for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
-            # If the index is not valid, continue
-            if idx == -1 or idx not in self.id_to_embedding_info:
-                continue
-            
-            # Get chunk information
-            chunk_info = self.id_to_embedding_info[idx]
-            metadata = chunk_info["metadata"]
-            chunk_id = chunk_info["chunk_id"]
-            
-            # Retrieve the original text directly from chunks cache
-            chunk_data = self.chunks_cache.get(chunk_id, {})
-            original_text = chunk_data.get("text", "")
-            
-            results.append({
-                "score": float(score),
-                "chunk_id": chunk_id,
-                "metadata": metadata,
-                "text": original_text
-            })
-            
-        return results
+        # Extract document IDs
+        relevant_doc_ids = []
+        for i, idx in enumerate(indices[0]):
+            if idx != -1 and idx in self.essential_id_to_info:
+                doc_id = self.essential_id_to_info[idx]["document_id"]
+                relevant_doc_ids.append(doc_id)
+                
+                vprint(f"Document {doc_id}: score {scores[0][i]:.4f}", self.verbose)
+        
+        vprint(f"Retrieved {len(relevant_doc_ids)} relevant documents for query: '{query}'", self.verbose)
+        
+        return relevant_doc_ids
     
-    def get_context(self, chunk_id: str) -> Dict[str, Any]:
+    def get_relevant_chunks_from_documents(self, query: str, document_ids: List[str], 
+                                         top_k: int = 5) -> List[Dict]:
         """
-        Retrieves contextual information for a fragment.
+        Second stage: Retrieve relevant chunks from specified documents.
+        
+        This method searches through the chunks index to find the most relevant
+        sections/subsections from the documents identified in the first stage.
         
         Args:
-            chunk_id: ID of the fragment for which context is desired
+            query: Search query string
+            document_ids: List of document IDs to search within (from first stage)
+            top_k: Number of top chunks to retrieve
             
         Returns:
-            Dictionary with contextual information
+            List of dictionaries containing chunk information:
+            - chunk_id: Unique identifier for the chunk
+            - text: Full text content of the chunk
+            - metadata: Metadata including document_id, chunk_type, title, etc.
+            - score: Similarity score from the search
+            
+        Raises:
+            RuntimeError: If the chunks index is not loaded
         """
-        # Extract information from chunk ID
-        parts = chunk_id.split(self.separator)
-        doc_id = parts[0]
+        if not self.chunks_index_loaded:
+            raise RuntimeError("Chunks index not loaded. Call load_chunks_index() first.")
         
-        # Get chunk metadata
-        chunk_data = self.chunks_cache.get(chunk_id)
-        if not chunk_data:
-            return {"error": "Chunk not found in cache"}
-            
-        chunk_metadata = chunk_data.get("metadata", {})
+        if self.chunks_index.ntotal == 0:
+            vprint("Warning: Chunks index is empty", self.verbose)
+            return []
         
-        # Initialize context with basic information
-        context = {
-            "document_id": doc_id,
-            "chunk_metadata": chunk_metadata,
-            "related_content": []
-        }
+        if not document_ids:
+            vprint("Warning: No document IDs provided for chunk search", self.verbose)
+            return []
         
-        # If we have the full document, add document title and enrich with hierarchical context
-        if doc_id in self.document_cache:
-            document = self.document_cache[doc_id]
-            context["document_title"] = document.get("nombre_medicamento", "")
-            
-            # Add contextual information based on the type of chunk
-            chunk_type = chunk_metadata.get("chunk_type", "")
-            
-            if chunk_type == "section":
-                # For a section, add all its subsections
-                section_id = chunk_metadata.get("chunk_id", "")
-                for section in document.get("secciones", []):
-                    if section.get("seccion_id") == section_id:
-                        context["section_data"] = section
-                        break
-            
-            elif chunk_type == "subsection":
-                # For a subsection, add the parent section and sibling subsections
-                path = chunk_metadata.get("path", [])
-                if len(path) >= 1:
-                    parent_id = path[0]
-                    for section in document.get("secciones", []):
-                        if section.get("seccion_id") == parent_id:
-                            context["parent_section"] = section
-                            subsec_id = chunk_metadata.get("chunk_id")
-                            # Add related subsections excluding the current one
-                            context["related_subsections"] = [
-                                subsec for subsec in section.get("subsecciones", [])
-                                if subsec.get("subseccion_id") != subsec_id
-                            ]
+        # Generate embedding for the query
+        query_embedding = self.embedding_model.get_embeddings(
+            [query], 
+            batch_size=1,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
+        
+        # Search in chunks index
+        # We search more broadly and then filter by document IDs to ensure we get enough results
+        search_k = min(top_k * len(document_ids) * 3, self.chunks_index.ntotal)
+        scores, indices = self.chunks_index.search(query_embedding, search_k)
+        
+        # Filter results by document IDs and collect relevant chunks
+        relevant_chunks = []
+        document_ids_set = set(document_ids)
+        
+        for i, idx in enumerate(indices[0]):
+            if idx != -1 and idx in self.chunks_id_to_info:
+                chunk_info = self.chunks_id_to_info[idx]
+                chunk_doc_id = chunk_info["metadata"]["document_id"]
+                
+                if chunk_doc_id in document_ids_set:
+                    chunk_id = chunk_info["chunk_id"]
+                    if chunk_id in self.chunks_cache:
+                        chunk_data = {
+                            "chunk_id": chunk_id,
+                            "text": self.chunks_cache[chunk_id]["text"],
+                            "metadata": chunk_info["metadata"],
+                            "score": float(scores[0][i])
+                        }
+                        relevant_chunks.append(chunk_data)
+                        
+                        vprint(f"Chunk {chunk_id}: score {chunk_data['score']:.4f}", self.verbose)
+                        
+                        if len(relevant_chunks) >= top_k:
                             break
         
-        else:
-            # If we don't have the full document, try to reconstruct context from chunks cache
-            # Get document title from any chunk of the same document
-            for other_chunk_id, other_chunk_data in self.chunks_cache.items():
-                if other_chunk_id.startswith(doc_id) and "text" in other_chunk_data:
-                    # Extract document title from the first line of any chunk
-                    first_line = other_chunk_data["text"].split("\n")[0]
-                    context["document_title"] = first_line
-                    break
-                    
-            # Find related chunks based on path information
-            path = chunk_metadata.get("path", [])
-            if path:
-                for other_chunk_id, other_chunk_data in self.chunks_cache.items():
-                    if other_chunk_id != chunk_id and other_chunk_id.startswith(doc_id):
-                        other_metadata = other_chunk_data.get("metadata", {})
-                        other_path = other_metadata.get("path", [])
-                        
-                        # Check if this chunk is related (parent, child, or sibling)
-                        if (len(other_path) > 0 and len(path) > 0 and 
-                            (other_path[0] == path[0] or  # Same section
-                             (len(path) > 1 and len(other_path) > 1 and other_path[1] == path[1]))):  # Same subsection
-                            
-                            context["related_content"].append({
-                                "chunk_id": other_chunk_id,
-                                "metadata": other_metadata,
-                                "relationship": "related"  # Could be refined to parent/child/sibling
-                            })
+        vprint(f"Retrieved {len(relevant_chunks)} relevant chunks from {len(document_ids)} documents", self.verbose)
         
-        return context
-        
-    def search_with_context(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+        return relevant_chunks
+    
+    def hierarchical_search(self, query: str, top_documents: int = 10, top_chunks: int = 5) -> List[Dict]:
         """
-        Searches for the k most relevant fragments and enriches with context.
+        Perform complete hierarchical search: first retrieve relevant documents, then relevant chunks.
+        
+        This is the main search method that combines both stages of the hierarchical search:
+        1. Find relevant documents based on essential information
+        2. Find relevant chunks within those documents
         
         Args:
-            query: User query
-            k: Number of results to retrieve
+            query: Search query string
+            top_documents: Number of top documents to retrieve in first stage
+            top_chunks: Number of top chunks to retrieve in second stage
             
         Returns:
-            List of results enriched with context
+            List of dictionaries containing the most relevant chunks with their information
+            
+        Raises:
+            RuntimeError: If either index is not loaded
         """
-        # Get basic results
-        results = self.search(query, k)
+        if not self.essential_index_loaded or not self.chunks_index_loaded:
+            raise RuntimeError("Both indices must be loaded. Call load_indices() first.")
         
-        # Enrich each result with context
-        for result in results:
-            chunk_id = result.get("chunk_id")
-            context = self.get_context(chunk_id)
-            result["context"] = context
+        vprint(f"Starting hierarchical search for query: '{query}'", self.verbose)
+        vprint(f"Stage 1: Retrieving top {top_documents} documents", self.verbose)
+        
+        # First stage: Get relevant document IDs
+        relevant_doc_ids = self.get_relevant_document_ids(query, top_documents)
+        
+        if not relevant_doc_ids:
+            vprint("No relevant documents found in first stage", self.verbose)
+            return []
+        
+        vprint(f"Stage 2: Retrieving top {top_chunks} chunks from {len(relevant_doc_ids)} documents", self.verbose)
+        
+        # Second stage: Get relevant chunks from those documents
+        relevant_chunks = self.get_relevant_chunks_from_documents(query, relevant_doc_ids, top_chunks)
+        
+        vprint(f"Hierarchical search completed: {len(relevant_chunks)} final results", self.verbose)
+        
+        return relevant_chunks
+    
+    def search_chunks_only(self, query: str, top_k: int = 10) -> List[Dict]:
+        """
+        Search directly in the chunks index without document-level filtering.
+        
+        This method bypasses the hierarchical approach and searches directly in all chunks.
+        Useful for cases where you want to search across all content regardless of document boundaries.
+        
+        Args:
+            query: Search query string
+            top_k: Number of top chunks to retrieve
             
+        Returns:
+            List of dictionaries containing chunk information ordered by relevance
+            
+        Raises:
+            RuntimeError: If the chunks index is not loaded
+        """
+        if not self.chunks_index_loaded:
+            raise RuntimeError("Chunks index not loaded. Call load_chunks_index() first.")
+        
+        if self.chunks_index.ntotal == 0:
+            vprint("Warning: Chunks index is empty", self.verbose)
+            return []
+        
+        # Generate embedding for the query
+        query_embedding = self.embedding_model.get_embeddings(
+            [query], 
+            batch_size=1,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
+        
+        # Search in chunks index
+        actual_k = min(top_k, self.chunks_index.ntotal)
+        scores, indices = self.chunks_index.search(query_embedding, actual_k)
+        
+        # Collect results
+        results = []
+        for i, idx in enumerate(indices[0]):
+            if idx != -1 and idx in self.chunks_id_to_info:
+                chunk_info = self.chunks_id_to_info[idx]
+                chunk_id = chunk_info["chunk_id"]
+                
+                if chunk_id in self.chunks_cache:
+                    chunk_data = {
+                        "chunk_id": chunk_id,
+                        "text": self.chunks_cache[chunk_id]["text"],
+                        "metadata": chunk_info["metadata"],
+                        "score": float(scores[0][i])
+                    }
+                    results.append(chunk_data)
+                    
+                    vprint(f"Chunk {chunk_id}: score {chunk_data['score']:.4f}", self.verbose)
+        
+        vprint(f"Direct chunk search completed: {len(results)} results", self.verbose)
+        
         return results
-
-def show_results(query: str, results: List[Dict[str, Any]]) -> None:
-    """
-    Format and display search results.
     
-    Args:
-        query: The user query
-        results: List of search results
-    """
-    print(f"\nQuery: {query}\n")
-    print("=" * 50)
-    
-    # Process results
-    for i, result in enumerate(results):
-        print(f"Result {i+1} (Score: {result['score']:.4f}):")
-        text_info = result.get('text', 'None')
-        #print(f"Fragment: {text_info[:100]}...")
-        print(f"Fragment: {text_info}")
-        print(f"Document: {result['metadata']['document_id']}")
-        print(f"Type: {result['metadata']['chunk_type']}")
+    def get_document_essential_info(self, document_id: str) -> Optional[str]:
+        """
+        Retrieve the essential information for a specific document.
         
-        if 'path' in result['metadata']:
-            print(f"Path: {result['metadata']['path']}")
+        Args:
+            document_id: ID of the document
             
-        print("-" * 50)
+        Returns:
+            Essential information text if found, None otherwise
+        """
+        if not self.essential_index_loaded:
+            vprint("Warning: Essential index not loaded", self.verbose)
+            return None
+        
+        return self.essential_cache.get(document_id)
+    
+    def get_chunk_by_id(self, chunk_id: str) -> Optional[Dict]:
+        """
+        Retrieve a specific chunk by its ID.
+        
+        Args:
+            chunk_id: ID of the chunk to retrieve
+            
+        Returns:
+            Dictionary containing chunk text and metadata if found, None otherwise
+        """
+        if not self.chunks_index_loaded:
+            vprint("Warning: Chunks index not loaded", self.verbose)
+            return None
+        
+        if chunk_id in self.chunks_cache:
+            # Find the metadata for this chunk
+            for faiss_id, info in self.chunks_id_to_info.items():
+                if info["chunk_id"] == chunk_id:
+                    return {
+                        "chunk_id": chunk_id,
+                        "text": self.chunks_cache[chunk_id]["text"],
+                        "metadata": info["metadata"]
+                    }
+        
+        return None
+    
+    def get_index_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about the loaded indices.
+        
+        Returns:
+            Dictionary containing statistics about both indices
+        """
+        stats = {
+            "essential_index_loaded": self.essential_index_loaded,
+            "chunks_index_loaded": self.chunks_index_loaded,
+            "essential_documents": 0,
+            "total_chunks": 0,
+            "essential_cache_size": 0,
+            "chunks_cache_size": 0
+        }
+        
+        if self.essential_index_loaded:
+            stats["essential_documents"] = self.essential_index.ntotal
+            stats["essential_cache_size"] = len(self.essential_cache)
+        
+        if self.chunks_index_loaded:
+            stats["total_chunks"] = self.chunks_index.ntotal
+            stats["chunks_cache_size"] = len(self.chunks_cache)
+        
+        return stats
+
 
 def example_usage():
-    """Example usage of the FAISS search system"""
+    """Example usage of the HierarchicalFaissSearch class"""
     
     # Get the absolute path of the directory where the script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
     # Build paths based on the script directory
-    #sim_path = os.path.join(script_dir, "../../models/similarity_model")
-    sim_path = "intfloat/multilingual-e5-large"
-    faiss_index_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/index.faiss")
-    mapping_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/mapping.json")
-    chunks_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/chunks.json")
-    jsons_path = os.path.join(script_dir, "../../data/posteriori_resources/processed_json")
+    sim_path = os.path.join(script_dir, "../../models/similarity_model")
+    
+    # Paths for hierarchical indices
+    essential_index_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/essential_index.faiss")
+    essential_mapping_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/essential_mapping.json")
+    essential_cache_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/essential_cache.json")
+    
+    chunks_index_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/chunks_index.faiss")
+    chunks_mapping_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/chunks_mapping.json")
+    chunks_cache_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/chunks_cache.json")
     
     # Normalize paths
-    #sim_path = os.path.abspath(sim_path)
-    faiss_index_path = os.path.abspath(faiss_index_path)
-    mapping_path = os.path.abspath(mapping_path)
-    chunks_path = os.path.abspath(chunks_path)
-    jsons_path = os.path.abspath(jsons_path)
+    sim_path = os.path.abspath(sim_path)
     
-    # Create embedding model
-    embedding_model = EmbeddingModel(
-        sim_path,
-        "cuda", #"cpu",
-        512
-    )
-    
-    # Create FAISS search
-    faiss_search = FaissSearch(embedding_model)
-    
-    # Load index and chunks cache
-    faiss_search.load_index(
-        faiss_index_path, 
-        mapping_path,
-        chunks_path,
-        documents_directory=jsons_path  # Optional, for rich context
-    )
-    
-    # Perform search
-    query = "¿puedo usar lincomicina en perros?"
-    results = faiss_search.search_with_context(query, k=3)
-    show_results(query, results)
+    try:
+        # Create embedding model
+        embedding_model = EmbeddingModel(
+            sim_path,
+            "cpu", #"cuda",
+            512
+        )
+        
+        # Create hierarchical search instance
+        search_engine = HierarchicalFaissSearch(
+            embedding_model,
+            separator="@",
+            verbose=True
+        )
+        
+        # Load both indices
+        search_engine.load_indices(
+            essential_index_path, essential_mapping_path, essential_cache_path,
+            chunks_index_path, chunks_mapping_path, chunks_cache_path
+        )
+        
+        # Get index statistics
+        stats = search_engine.get_index_statistics()
+        print(f"\nIndex Statistics:")
+        print(f"  Essential documents: {stats['essential_documents']}")
+        print(f"  Total chunks: {stats['total_chunks']}")
+        
+        # Example hierarchical search
+        query = "mi perro tiene insuficiencia cardíaca, qué le puedo dar?"
+        #query = "a mi perro le han mandado enacard 5 mg, cuánto le doy?"
+        print(f"\n{'='*60}")
+        print(f"Hierarchical search for: '{query}'")
+        print(f"{'='*60}")
+        
+        len_text_preview = 500
+        results = search_engine.hierarchical_search(query, top_documents=5, top_chunks=3)
+        
+        for i, result in enumerate(results):
+            print(f"\n--- Result {i+1} (Score: {result['score']:.4f}) ---")
+            print(f"Document ID: {result['metadata']['document_id']}")
+            print(f"Chunk Type: {result['metadata']['chunk_type']}")
+            if 'title' in result['metadata']:
+                print(f"Section Title: {result['metadata']['title']}")
+            print(f"Text preview ({len_text_preview} chars): {result['text'][:len_text_preview]} ...")
+        
+        # Example direct chunk search
+        print(f"\n{'='*60}")
+        print(f"Direct chunk search for: '{query}'")
+        print(f"{'='*60}")
+        
+        direct_results = search_engine.search_chunks_only(query, top_k=3)
+        
+        for i, result in enumerate(direct_results):
+            print(f"\n--- Direct Result {i+1} (Score: {result['score']:.4f}) ---")
+            print(f"Document ID: {result['metadata']['document_id']}")
+            print(f"Chunk Type: {result['metadata']['chunk_type']}")
+            print(f"Text preview ({len_text_preview} chars): {result['text'][:len_text_preview]} ...")
+        
+        # Example of getting essential info for a document
+        if results:
+            doc_id = results[0]['metadata']['document_id']
+            essential_info = search_engine.get_document_essential_info(doc_id)
+            if essential_info:
+                print(f"\n{'='*60}")
+                print(f"Essential info for document {doc_id}:")
+                print(f"{'='*60}")
+                print(essential_info)
+        
+    except Exception as e:
+        print(f"Error during example execution: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
 
 if __name__ == "__main__":
+    print("Running HierarchicalFaissSearch example...")
     example_usage()
-
-
-
-
-
