@@ -11,7 +11,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "../../../../"))
 sys.path.append(PROJECT_ROOT)
 
 from shared.veterinary_utils.embedding_model import EmbeddingModel
-from tools.arqa.faiss_search import FaissSearch
+from tools.arqa.faiss_search import HierarchicalFaissSearch
 from tools.arqa.evaluation.metrics import (
     precision_at_k,
     recall_at_k,
@@ -22,8 +22,8 @@ from tools.arqa.evaluation.metrics import (
 )
 
 
-def search_chunks(query: str, faiss_search: FaissSearch, top_k: int) -> list[dict]:
-    """Retrieve chunks using the ``FaissSearch`` helper.
+def search_chunks(query: str, faiss_search: HierarchicalFaissSearch, top_k: int) -> list[dict]:
+    """Retrieve chunks using the ``HierarchicalFaissSearch`` helper.
 
     Args:
         query: User question to embed and search.
@@ -31,7 +31,7 @@ def search_chunks(query: str, faiss_search: FaissSearch, top_k: int) -> list[dic
         top_k: Number of chunks to retrieve.
 
     Returns:
-        List of chunk dictionaries as returned by ``FaissSearch.search``.
+        List of chunk dictionaries as returned by ``HierarchicalFaissSearch.search``.
     """
 
     return faiss_search.search(query=query, k=top_k)
@@ -41,7 +41,7 @@ def unique_doc_ids(results: list[dict], limit: int) -> list[str]:
     """Get a list of unique document identifiers from ranked chunks.
 
     Args:
-        results: List of chunk dictionaries returned by ``FaissSearch``.
+        results: List of chunk dictionaries returned by ``HierarchicalFaissSearch``.
         limit: Maximum number of unique document ids to return.
 
     Returns:
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     # --- Load resources ---
     embedding_model = EmbeddingModel(EMBEDDING_MODEL_PATH, args.device, 512)
 
-    faiss_search = FaissSearch(embedding_model)
+    faiss_search = HierarchicalFaissSearch(embedding_model)
     faiss_search.load_index(
         index_path=INDEX_PATH,
         mapping_path=MAPPING_PATH,
