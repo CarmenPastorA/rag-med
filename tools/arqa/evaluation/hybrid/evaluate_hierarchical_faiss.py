@@ -1,3 +1,11 @@
+"""Evaluation script for FAISS retrieval using ``FaissSearch``.
+
+This utility loads the FAISS index built for the project and evaluates the
+retriever on a set of questions.  The script computes common information
+retrieval metrics such as precision at *k* and mean reciprocal rank.  Results
+are saved both as JSON and as a Markdown report.
+"""
+
 import os
 import sys
 import json
@@ -22,18 +30,22 @@ from tools.arqa.evaluation.metrics import (
 )
 
 
-def search_chunks(query: str, faiss_search: FaissSearch, top_k: int) -> list[dict]:
+def search_chunks(query: str, faiss_search: FaissSearch, top_k: int, with_context: bool = False) -> list[dict]:
     """Retrieve chunks using the ``FaissSearch`` helper.
 
     Args:
         query: User question to embed and search.
         faiss_search: Initialized search object with a loaded index.
         top_k: Number of chunks to retrieve.
+        with_context: Whether to include hierarchical context for each chunk.
 
     Returns:
-        List of chunk dictionaries as returned by ``FaissSearch.search``.
+        List of chunk dictionaries as returned by ``FaissSearch.search`` or
+        ``FaissSearch.search_with_context`` depending on ``with_context``.
     """
 
+    if with_context:
+        return faiss_search.search_with_context(query=query, k=top_k)
     return faiss_search.search(query=query, k=top_k)
 
 
@@ -62,18 +74,37 @@ def unique_doc_ids(results: list[dict], limit: int) -> list[str]:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Evaluate the FAISS retriever using the new helper class"
+        description="Evaluate the FAISS retriever using the new helper class",
     )
-    # Number of chunks retrieved from the FAISS index for each query
-    parser.add_argument("--top_k", type=int, default=50,
-                        help="Number of chunks returned by the search")
-    # Number of unique documents considered when computing metrics
-    parser.add_argument("--final_top_k", type=int, default=50,
-                        help="Unique documents used for evaluation")
-    # Device where the embedding model will run (e.g. 'cuda' or 'cpu')
+    # ``top_k`` determines how many chunks are retrieved for each query.
+    # Larger values improve recall at the cost of extra computation.
+    parser.add_argument(
+        "--top_k",
+        type=int,
+        default=50,
+        help="Number of chunks returned by the search",
+    )
+    # ``final_top_k`` is the number of unique document identifiers used to
+    # compute metrics. Duplicated documents are collapsed before evaluation.
+    parser.add_argument(
+        "--final_top_k",
+        type=int,
+        default=50,
+        help="Unique documents used for evaluation",
+    )
+    # ``device`` selects the hardware for the embedding model (cuda or cpu).
     parser.add_argument("--device", type=str, default="cuda")
+    # ``with_context`` indicates whether ``search_with_context`` should be used
+    # to enrich the retrieved chunks with hierarchical information.
+    parser.add_argument(
+        "--with_context",
+        action="store_true",
+        help="Return extra context for each retrieved chunk",
+    )
     args = parser.parse_args()
 
+    # Paths to all required resources. These locations are project specific and
+    # should match those used when building the FAISS index.
     #EMBEDDING_MODEL_PATH = "intfloat/multilingual-e5-large"
     EMBEDDING_MODEL_PATH = os.path.join(PROJECT_ROOT, "models/multilingual-e5-large-local")
     INDEX_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/index.faiss")
@@ -83,6 +114,8 @@ if __name__ == "__main__":
     QUESTIONS_PATH = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/generated_datasets/structured_mistral_min3.jsonl")
 
     run_name = f"faiss_eval_k{args.final_top_k}"
+    if args.with_context:
+        run_name += "_context"
     LOG_DIR = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/hybrid/logs")
     os.makedirs(LOG_DIR, exist_ok=True)
     LOG_JSON = os.path.join(LOG_DIR, f"{run_name}.json")
@@ -109,7 +142,12 @@ if __name__ == "__main__":
         query = q["question"]
         relevant_ids = q["relevant_doc_ids"]
 
-        chunk_results = search_chunks(query, faiss_search, args.top_k)
+        chunk_results = search_chunks(
+            query,
+            faiss_search,
+            args.top_k,
+            with_context=args.with_context,
+        )
         retrieved_ids = unique_doc_ids(chunk_results, args.final_top_k)
 
         results.append({
@@ -141,6 +179,7 @@ if __name__ == "__main__":
         "top_k": args.top_k,
         "final_top_k": args.final_top_k,
         "device": args.device,
+        "with_context": args.with_context,
     }
 
     with open(LOG_JSON, "w", encoding="utf-8") as f:
@@ -151,7 +190,8 @@ if __name__ == "__main__":
         f.write("## Configuration\n")
         f.write(f"- Chunks retrieved: {args.top_k}\n")
         f.write(f"- Final top-K: {args.final_top_k}\n")
-        f.write(f"- Device: {args.device}\n\n")
+        f.write(f"- Device: {args.device}\n")
+        f.write(f"- With context: {args.with_context}\n\n")
         f.write("## Global Metrics\n")
         for k, v in global_metrics.items():
             f.write(f"- **{k}**: {v}\n")
