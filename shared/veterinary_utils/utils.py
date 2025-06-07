@@ -11,6 +11,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from shared import dunder_info
 dunder_info.inject_dunder(__name__) # injects the variables
 
+def normalize_doc_id(doc_id: str) -> str:
+    return doc_id.replace("FT_", "").replace("_", " ").strip()
+
 def get_text(input_file):
     with open(input_file, "r", encoding="utf8") as document:
         text = document.read()

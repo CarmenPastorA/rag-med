@@ -46,7 +46,9 @@ QUESTIONS_PATH = os.path.join(
 LOG_DIR = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/hybrid/logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-EMBEDDING_MODEL_PATH = "intfloat/multilingual-e5-large"
+EMBEDDING_MODEL_PATH = os.path.join(
+    PROJECT_ROOT, "models/multilingual-e5-large-local"
+)
 ESSENTIAL_INDEX_PATH = os.path.join(
     PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_index.faiss"
 )
@@ -69,6 +71,15 @@ CHUNKS_CACHE_PATH = os.path.join(
 parser = argparse.ArgumentParser(
     description="Evaluate the hierarchical FAISS retriever"
 )
+<<<<<<< HEAD
+=======
+parser.add_argument("--doc_top_n", type=int, default=50,
+                    help="Number of documents retrieved from essential index")
+parser.add_argument("--chunk_top_k", type=int, default=10,
+                    help="Number of chunks retrieved from selected documents")
+parser.add_argument("--device", type=str, default="cuda")
+args = parser.parse_args()
+>>>>>>> 51b6eee (Update evaluation_hierarchical_faiss + utils + faiss_search with local tested version)
 
 embedding_model = EmbeddingModel(EMBEDDING_MODEL_PATH, args.device, 512)
 retriever = HierarchicalFaissSearch(embedding_model, verbose=False)

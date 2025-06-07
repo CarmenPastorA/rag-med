@@ -485,7 +485,7 @@ def example_usage():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
     # Build paths based on the script directory
-    sim_path = os.path.join(script_dir, "../../models/similarity_model")
+    sim_path = os.path.join(script_dir, "../../models/multilingual-e5-large-local")
     
     # Paths for hierarchical indices
     essential_index_path = os.path.join(script_dir, "../../data/posteriori_resources/faiss_stuff/essential_index.faiss")
