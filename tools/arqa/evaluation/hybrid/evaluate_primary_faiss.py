@@ -42,7 +42,9 @@ QUESTIONS_PATH = os.path.join(
 LOG_DIR = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/hybrid/logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-EMBEDDING_MODEL_PATH = "intfloat/multilingual-e5-large"
+EMBEDDING_MODEL_PATH = os.path.join(
+    PROJECT_ROOT, "models/multilingual-e5-large-local"
+)
 ESSENTIAL_INDEX_PATH = os.path.join(
     PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_index.faiss"
 )
@@ -70,7 +72,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "--doc_top_n",
     type=int,
-    default=10,
+    default=50,
     help="Number of documents retrieved from the essential index",
 )
 parser.add_argument(

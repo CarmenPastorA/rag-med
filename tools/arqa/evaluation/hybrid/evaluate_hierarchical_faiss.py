@@ -1,17 +1,8 @@
-
-"""evaluate_hierarchical_faiss.py
----------------------------------
-
-Evaluate the full hierarchical FAISS retriever on a set of synthetic
-question/answer pairs.
-
-This script loads both the essential-information index (document level)
-and the chunks index (subsection level). Each question is first used to
-retrieve candidate documents from the essential index, then relevant
-chunks are fetched from those documents. Metrics are computed using the
-unique document IDs from the retrieved chunks so that we can directly
-compare with other document-level evaluations.
-=======
+"""
+Evaluate hierarchical FAISS retriever over synthetic QA pairs.
+This uses the HierarchicalFaissSearch class to first retrieve relevant
+SmPC documents from an index built on essential information and then
+fetch the most relevant chunks from those documents.
 """
 
 import os
@@ -71,16 +62,20 @@ CHUNKS_CACHE_PATH = os.path.join(
 parser = argparse.ArgumentParser(
     description="Evaluate the hierarchical FAISS retriever"
 )
-<<<<<<< HEAD
-=======
 parser.add_argument("--doc_top_n", type=int, default=50,
                     help="Number of documents retrieved from essential index")
 parser.add_argument("--chunk_top_k", type=int, default=10,
                     help="Number of chunks retrieved from selected documents")
 parser.add_argument("--device", type=str, default="cuda")
 args = parser.parse_args()
->>>>>>> 51b6eee (Update evaluation_hierarchical_faiss + utils + faiss_search with local tested version)
 
+run_name = (
+    f"hierarchical_faiss_eval_doc{args.doc_top_n}_chunk{args.chunk_top_k}"
+)
+LOG_JSON = os.path.join(LOG_DIR, f"{run_name}.json")
+LOG_MD = os.path.join(LOG_DIR, f"{run_name}.md")
+
+# Load retriever
 embedding_model = EmbeddingModel(EMBEDDING_MODEL_PATH, args.device, 512)
 retriever = HierarchicalFaissSearch(embedding_model, verbose=False)
 retriever.load_indices(
@@ -102,6 +97,14 @@ for q in questions:
     qid = q["id"]
     question = q["question"]
     expected_ids = [normalize_doc_id(doc) for doc in q["relevant_doc_ids"]]
+
+    retrieved_chunks = retriever.hierarchical_search(
+        question, top_documents=args.doc_top_n, top_chunks=args.chunk_top_k
+    )
+    retrieved_ids = [
+        normalize_doc_id(chunk["metadata"]["document_id"])
+        for chunk in retrieved_chunks
+    ]
 
     results.append(
         {
