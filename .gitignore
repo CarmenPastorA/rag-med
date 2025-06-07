@@ -31,5 +31,3 @@ __pycache__/
 
 # Ignora carpetas específicas
 data/posteriori_resources/faiss_stuff/
-
-README.md
