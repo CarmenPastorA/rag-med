@@ -42,7 +42,9 @@ def load_log_metrics(log_file: str) -> Dict[str, str]:
         data = json.load(f)
 
     summary = data.get("summary", {})
-    run_name = summary.get("run_name", os.path.splitext(os.path.basename(log_file))[0])
+
+    # Force run_name to always be the json filename (without extension)
+    run_name = os.path.splitext(os.path.basename(log_file))[0]
 
     # Determine retriever method from path or run_name
     if "bm25" in log_file or "bm25" in run_name.lower():
@@ -54,18 +56,15 @@ def load_log_metrics(log_file: str) -> Dict[str, str]:
     else:
         method = "faiss"
 
-    # Attempt to extract a more readable name
-    md_name = run_name.replace("_eval_", "").replace("bm25_", "").replace("faiss_", "").replace("hybrid_", "")
-    md_name = md_name.replace("primary_faiss_", "").replace(".md", "").replace(".json", "").replace("k", "k=")
-
     return {
-        "run_name": md_name,
+        "run_name": run_name,
         "method": method,
         "normalized_precision": summary.get("mean_normalized_precision@k", 0),
         "recall": summary.get("mean_recall@k", 0),
         "hit_rate": summary.get("mean_hit@k", 0),
         "mrr": summary.get("mean_mrr", 0),
     }
+
 
 
 def collect_all_metrics(directories: List[str]) -> pd.DataFrame:
@@ -80,7 +79,7 @@ def collect_all_metrics(directories: List[str]) -> pd.DataFrame:
 
 
 def plot_unified_metrics(df: pd.DataFrame, output_path: str) -> None:
-    """Create a unified 4-subplot figure comparing all metrics."""
+    """Create a unified 4-subplot figure comparing all metrics with custom order."""
     # Color palette similar to example provided
     palette = {
         "bm25": "#5B8C5A",    # green tone
@@ -96,12 +95,30 @@ def plot_unified_metrics(df: pd.DataFrame, output_path: str) -> None:
         ("mrr", "MRR"),
     ]
 
-    # Sort dataframe for consistent ordering
-    df_sorted = df.sort_values("method")
+    # Manual order
+    order = [
+        "bm25_k10",
+        "bm25_k50",
+        "faiss_k10",
+        "faiss_k50",
+        "primary_faiss_k10",
+        "primary_faiss_k50",
+        "hybrid_k10",
+        "hybrid_k50",
+        "hybrid_k50_alpha0_2",
+        "hybrid_k50_alpha0_6",
+        "hierarchical_faiss_k50",
+    ]
 
+    # Apply order as categorical
+    df["run_name"] = pd.Categorical(df["run_name"], categories=order, ordered=True)
+    df_sorted = df.sort_values("run_name")
+
+    # Prepare labels and colors
     x_labels = df_sorted["run_name"].tolist()
     color_list = [palette.get(m, "gray") for m in df_sorted["method"]]
 
+    # Create figure
     fig, axes = plt.subplots(2, 2, figsize=(14, 8))
     axes = axes.flatten()
 
@@ -132,7 +149,24 @@ def plot_individual_metric(df: pd.DataFrame, metric: str, title: str, output_pat
         "hybrid": "#5B7DB1",
     }
 
-    df_sorted = df.sort_values("method")
+    # Manual order
+    order = [
+        "bm25_k10",
+        "bm25_k50",
+        "faiss_k10",
+        "faiss_k50",
+        "primary_faiss_k10",
+        "primary_faiss_k50",
+        "hybrid_k10",
+        "hybrid_k50",
+        "hybrid_k50_alpha0_2",
+        "hybrid_k50_alpha0_6",
+        "hierarchical_faiss_k50",
+    ]
+
+    # Apply order as categorical
+    df["run_name"] = pd.Categorical(df["run_name"], categories=order, ordered=True)
+    df_sorted = df.sort_values("run_name")
 
     x_labels = df_sorted["run_name"].tolist()
     color_list = [palette.get(m, "gray") for m in df_sorted["method"]]
@@ -152,6 +186,7 @@ def plot_individual_metric(df: pd.DataFrame, metric: str, title: str, output_pat
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
+
 
 
 if __name__ == "__main__":
