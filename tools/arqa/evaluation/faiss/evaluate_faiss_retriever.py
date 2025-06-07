@@ -28,7 +28,7 @@ CHUNKS_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/
 QUESTIONS_PATH = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/generated_datasets/structured_mistral_min3.jsonl")
 
 # Create a unique name for this evaluation run
-RUN_NAME = f"faiss_eval_{datetime.now().strftime('%Y-%m-%d')}_k{K}_e5"
+RUN_NAME = f"faiss_eval_{datetime.now().strftime('%Y-%m-%d')}_k{K}"
 LOG_DIR =  os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/faiss/logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_JSON = os.path.join(LOG_DIR, f"{RUN_NAME}.json")
