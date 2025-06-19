@@ -10,6 +10,7 @@ answer questions with a language model served by [vLLM](https://github.com/vllm-
 ```
 .
 ├── client_vllm.py            # Example of querying a running vLLM server
+├── client_rag.py             # End-to-end RAG pipeline client (retrieval + generation)
 ├── launch_vllm_server.py     # Helper to start the vLLM OpenAI API server
 ├── run_with_gpu.py           # Utility to run another script on the least used GPU
 ├── data/                     # Sample data and resources
@@ -45,11 +46,14 @@ pip install -r requirements.txt
 python launch_vllm_server.py
 ```
 
-3. In a new terminal, try the example client:
+3. In a new terminal, run the end-to-end RAG client:
 
-```bash
-python client_vllm.py
-```
+ ```bash
+ python client_rag.py
+ ```
+
+This script combines document retrieval (BM25, FAISS or hybrid) with generation
+using a vLLM-served model. It is the recommended way to run the system interactively.
 
 ## Running the RAG pipeline
 
