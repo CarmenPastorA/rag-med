@@ -1,4 +1,4 @@
-
+# faiss_search.py
 
 """
 Hierarchical FAISS search module for veterinary medicine RAG system.
@@ -476,6 +476,19 @@ class HierarchicalFaissSearch:
             stats["chunks_cache_size"] = len(self.chunks_cache)
         
         return stats
+
+    def get_chunk_index(self):
+        """
+        Return the raw FAISS index used for chunk-level retrieval.
+        
+        Useful for operations like reconstruct(faiss_id), which require direct access
+        to the internal FAISS index structure.
+        """
+        if not self.chunks_index_loaded:
+            raise RuntimeError("Chunks index not loaded.")
+        return self.chunks_index
+
+
 
 
 def example_usage():

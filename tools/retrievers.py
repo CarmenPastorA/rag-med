@@ -1,7 +1,5 @@
 # === retrievers.py ===
 
-# retrievers.py (clean version)
-
 import os
 import sys
 import json
@@ -13,7 +11,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(PROJECT_ROOT)
 
 from tools.arqa.bm25_search import BM25Search
-from tools.arqa.faiss_search import FaissSearch
+from tools.arqa.faiss_search import HierarchicalFaissSearch
 from shared.veterinary_utils.embedding_model import EmbeddingModel
 from shared.veterinary_utils.utils import normalize_doc_id
 
@@ -22,10 +20,17 @@ FASTTEXT_PATH = os.path.join(PROJECT_ROOT, "models/lang_model")
 STOPWORDS_PATH = os.path.join(PROJECT_ROOT, "data/priori_resources/stopwords.txt")
 PRESERVE_WORDS_PATH = os.path.join(PROJECT_ROOT, "data/priori_resources/preserve_words.txt")
 
-FAISS_INDEX_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/index.faiss")
-FAISS_MAPPING_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/mapping.json")
-FAISS_CHUNKS_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks.json")
 FAISS_DOCS_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/processed_json")
+
+# === FAISS Essential-level (document-level) index ===
+ESSENTIAL_INDEX_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_index.faiss")
+ESSENTIAL_MAPPING_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_mapping.json")
+ESSENTIAL_CACHE_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/essential_cache.json")
+
+# === FAISS Chunk-level index ===
+CHUNKS_INDEX_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks_index.faiss")
+CHUNKS_MAPPING_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks_mapping.json")
+CHUNKS_CACHE_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks_cache.json")
 
 EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-large"
 
@@ -53,12 +58,14 @@ def get_faiss_results(question: str, top_k: int = 10, device: str = "cuda") -> l
     if _embedding_model is None:
         _embedding_model = EmbeddingModel(EMBEDDING_MODEL_NAME, device, 512)
     if _faiss_search is None:
-        _faiss_search = FaissSearch(_embedding_model)
-        _faiss_search.load_index(
-            index_path=FAISS_INDEX_PATH,
-            mapping_path=FAISS_MAPPING_PATH,
-            chunks_path=FAISS_CHUNKS_PATH,
-            documents_directory=FAISS_DOCS_PATH
+        _faiss_search = HierarchicalFaissSearch(_embedding_model)
+        _faiss_search.load_indices(
+            essential_index_path=ESSENTIAL_INDEX_PATH,
+            essential_mapping_path=ESSENTIAL_MAPPING_PATH,
+            essential_cache_path=ESSENTIAL_CACHE_PATH,
+            chunks_index_path=CHUNKS_INDEX_PATH,
+            chunks_mapping_path=CHUNKS_MAPPING_PATH,
+            chunks_cache_path=CHUNKS_CACHE_PATH
         )
     return [
         {
@@ -86,19 +93,21 @@ def get_late_fusion_with_fallback(
     if _embedding_model is None:
         _embedding_model = EmbeddingModel(EMBEDDING_MODEL_NAME, device, 512)
     if _faiss_search is None:
-        _faiss_search = FaissSearch(_embedding_model)
-        _faiss_search.load_index(
-            index_path=FAISS_INDEX_PATH,
-            mapping_path=FAISS_MAPPING_PATH,
-            chunks_path=FAISS_CHUNKS_PATH,
-            documents_directory=FAISS_DOCS_PATH
+        _faiss_search = HierarchicalFaissSearch(_embedding_model)
+        _faiss_search.load_indices(
+            essential_index_path=ESSENTIAL_INDEX_PATH,
+            essential_mapping_path=ESSENTIAL_MAPPING_PATH,
+            essential_cache_path=ESSENTIAL_CACHE_PATH,
+            chunks_index_path=CHUNKS_INDEX_PATH,
+            chunks_mapping_path=CHUNKS_MAPPING_PATH,
+            chunks_cache_path=CHUNKS_CACHE_PATH
         )
     if _faiss_chunks is None:
-        with open(FAISS_CHUNKS_PATH, "r", encoding="utf-8") as f:
+        with open(CHUNKS_CACHE_PATH, "r", encoding="utf-8") as f:
             _faiss_chunks = json.load(f)
 
     # 1. Retrieve top-K chunks from FAISS
-    faiss_results = _faiss_search.search(query=question, k=faiss_top_k)
+    faiss_results = _faiss_search.search_chunks_only(query=question, top_k=faiss_top_k)
     faiss_chunks = []
     faiss_doc_ids = set()
 
@@ -116,9 +125,9 @@ def get_late_fusion_with_fallback(
     fallback_doc_ids = [doc_id for doc_id in bm25_doc_ids if doc_id not in faiss_doc_ids][:bm25_fallback_top_n]
 
     # 3. Load mappings and chunk texts
-    with open(FAISS_MAPPING_PATH, "r", encoding="utf-8") as f:
+    with open(CHUNKS_MAPPING_PATH, "r", encoding="utf-8") as f:
         id_to_embedding_info = json.load(f)
-    with open(FAISS_CHUNKS_PATH, "r", encoding="utf-8") as f:
+    with open(CHUNKS_CACHE_PATH, "r", encoding="utf-8") as f:
         chunks_cache = json.load(f)
 
     # 4. Embed the query
@@ -141,7 +150,7 @@ def get_late_fusion_with_fallback(
             continue
 
         chunk_text = chunks_cache[full_chunk_id]["text"]
-        chunk_emb = _faiss_search.index.reconstruct(faiss_id)
+        chunk_emb = _faiss_search.get_chunk_index().reconstruct(faiss_id)
         doc_chunks.setdefault(doc_id, []).append((full_chunk_id, chunk_text, chunk_emb))
 
     fallback_scores = []
@@ -242,16 +251,18 @@ def analyze_bm25_fallback_needs(
         _embedding_model = EmbeddingModel(EMBEDDING_MODEL_NAME, device, 512)
 
     if _faiss_search is None:
-        _faiss_search = FaissSearch(_embedding_model)
-        _faiss_search.load_index(
-            index_path=FAISS_INDEX_PATH,
-            mapping_path=FAISS_MAPPING_PATH,
-            chunks_path=FAISS_CHUNKS_PATH,
-            documents_directory=FAISS_DOCS_PATH
+        _faiss_search = HierarchicalFaissSearch(_embedding_model)
+        _faiss_search.load_indices(
+            essential_index_path=ESSENTIAL_INDEX_PATH,
+            essential_mapping_path=ESSENTIAL_MAPPING_PATH,
+            essential_cache_path=ESSENTIAL_CACHE_PATH,
+            chunks_index_path=CHUNKS_INDEX_PATH,
+            chunks_mapping_path=CHUNKS_MAPPING_PATH,
+            chunks_cache_path=CHUNKS_CACHE_PATH
         )
 
     if _faiss_chunks is None:
-        with open(FAISS_CHUNKS_PATH, "r", encoding="utf-8") as f:
+        with open(CHUNKS_CACHE_PATH, "r", encoding="utf-8") as f:
             _faiss_chunks = json.load(f)
 
     # Retrieve top-N BM25 document IDs (normalized)
