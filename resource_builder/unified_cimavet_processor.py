@@ -1,4 +1,5 @@
 
+# unfied_cimavet_processor.py
 
 """
 It allows the following:
@@ -77,6 +78,7 @@ class CIMAVetProcessor:
         self.max_empty_responses = max_empty_responses
         self.use_hierarchical_storage = use_hierarchical_storage
         self.pact_mapping = self._load_static_pact_mapping()
+        self.embed_model_path = "intfloat/multilingual-e5-large"
         
         # Create directory structure
         self.json_dir = os.path.join(output_dir, "json_data")
@@ -1123,117 +1125,108 @@ class CIMAVetProcessor:
     def store_in_faiss(self):
         """Stores the content of the JSONs in FAISS"""
         logger.info("Starting storage at FAISS...")
-        
+    
         try:
             # Add the project directory to the path for imports
             project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
             if project_root not in sys.path:
                 sys.path.append(project_root)
-            
-            # Import from shared modules
+    
+            # Import embedding model and FAISS storage classes
             from shared.veterinary_utils.embedding_model import EmbeddingModel
+            if self.embed_model_path == "jinaai/jina-embeddings-v3":
+                from shared.veterinary_utils.jina_embedding_model import JinaEmbeddingModel as EmbeddingModel
+            else:
+                from shared.veterinary_utils.embedding_model import EmbeddingModel
+
+
             
             if self.use_hierarchical_storage:
                 from resource_builder.scripts.faiss_storage import HierarchicalFaissStorage
             else:
                 from resource_builder.scripts.faiss_storage import FaissStorage
-            
-            # Paths for files
-            model_path = os.path.join(project_root, "models/multilingual-e5-large-local")
-            #model_path = "intfloat/multilingual-e5-large"
+    
+            # Configure model and output folder
+            model_path = self.embed_model_path if hasattr(self, 'embed_model_path') else "intfloat/multilingual-e5-large"
+            model_tag = model_path.split("/")[-1].replace("-", "_").replace(".", "_")
+            faiss_output_dir = os.path.join(project_root, f"data/posteriori_resources/faiss_stuff_{model_tag}")
+            os.makedirs(faiss_output_dir, exist_ok=True)
+    
             json_dir = os.path.join(project_root, "data/posteriori_resources/processed_json")
             essential_info_dir = os.path.join(project_root, "data/posteriori_resources/essential_info")
-            
+    
+            # Define paths based on retrieval mode
             if self.use_hierarchical_storage:
-                # Paths for hierarchical storage
-                essential_index_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/essential_index.faiss")
-                essential_mapping_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/essential_mapping.json")
-                essential_cache_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/essential_cache.json")
-                
-                chunks_index_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/chunks_index.faiss")
-                chunks_mapping_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/chunks_mapping.json")
-                chunks_cache_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/chunks_cache.json")
-                
-                # Check if hierarchical indices exist and are valid
+                essential_index_path = os.path.join(faiss_output_dir, "essential_index.faiss")
+                essential_mapping_path = os.path.join(faiss_output_dir, "essential_mapping.json")
+                essential_cache_path = os.path.join(faiss_output_dir, "essential_cache.json")
+    
+                chunks_index_path = os.path.join(faiss_output_dir, "chunks_index.faiss")
+                chunks_mapping_path = os.path.join(faiss_output_dir, "chunks_mapping.json")
+                chunks_cache_path = os.path.join(faiss_output_dir, "chunks_cache.json")
+    
+                # Skip if indices already exist and no updates
                 hierarchical_indices_exist = (
                     os.path.exists(essential_index_path) and os.path.getsize(essential_index_path) > 0 and
                     os.path.exists(chunks_index_path) and os.path.getsize(chunks_index_path) > 0
                 )
-                
                 if hierarchical_indices_exist and not self.registration_numbers:
                     if self.last_execution and self.consecutive_empty_responses < self.max_empty_responses:
                         logger.info("No changes detected since last execution. Skipping hierarchical FAISS storage.")
                         return True
             else:
-                # Traditional single-index paths
-                faiss_index_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/index.faiss")
-                mapping_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/mapping.json")
-                chunks_path = os.path.join(project_root, "data/posteriori_resources/faiss_stuff/chunks.json")
-                
-                # Check if traditional index exists and is valid
+                faiss_index_path = os.path.join(faiss_output_dir, "index.faiss")
+                mapping_path = os.path.join(faiss_output_dir, "mapping.json")
+                chunks_path = os.path.join(faiss_output_dir, "chunks.json")
+    
                 if os.path.exists(faiss_index_path) and os.path.getsize(faiss_index_path) > 0 and not self.registration_numbers:
                     if self.last_execution and self.consecutive_empty_responses < self.max_empty_responses:
                         logger.info("No changes detected since last execution. Skipping traditional FAISS storage.")
                         return True
-            
-            # Initialize embedding model
-            embedding_model = EmbeddingModel(
-                model_path,
-                "cuda", #"cpu",
-                512
-            )
-            
+    
+            # Load and use embedding model
+            logger.info(f"Using embedding model: {model_path}")
+            embedding_model = EmbeddingModel(model_path, "cuda", 512)
+    
             if self.use_hierarchical_storage:
                 logger.info("Using hierarchical FAISS storage (two-stage retrieval)...")
-                
-                # Check if essential_info directory exists
+    
                 if not os.path.exists(essential_info_dir):
                     logger.warning(f"Essential info directory not found: {essential_info_dir}")
-                    logger.warning("Creating empty directory. Please populate with essential info files.")
                     os.makedirs(essential_info_dir, exist_ok=True)
-                
-                # Initialize Hierarchical FAISS Storage
+    
                 storage_emb = HierarchicalFaissStorage(
                     embedding_model,
                     embedding_dim=embedding_model.get_word_embedding_dimension()
                 )
-                
-                # Add ALL documents to both indices
                 storage_emb.add_documents_from_directory(json_dir, essential_info_dir)
-                
-                # Save both indices and their associated data
                 storage_emb.save_indices(
                     essential_index_path, essential_mapping_path, essential_cache_path,
                     chunks_index_path, chunks_mapping_path, chunks_cache_path
                 )
-                
                 logger.info("Hierarchical FAISS storage completed successfully")
                 logger.info(f"Essential info index: {storage_emb.essential_index.ntotal} documents")
                 logger.info(f"Chunks index: {storage_emb.chunks_index.ntotal} chunks")
-                
+    
             else:
                 logger.info("Using traditional FAISS storage (single-stage retrieval)...")
-                
-                # Initialize traditional FAISS Storage
+    
                 storage_emb = FaissStorage(
                     embedding_model,
                     embedding_dim=embedding_model.get_word_embedding_dimension()
                 )
-                
-                # Add ALL documents
                 storage_emb.add_documents_from_directory(json_dir)
-                
-                # Save index and chunks cache
                 storage_emb.save_index(faiss_index_path, mapping_path, chunks_path)
-                
+    
                 logger.info("Traditional FAISS storage completed successfully")
                 logger.info(f"Index contains: {storage_emb.index.ntotal} chunks")
-            
+    
             return True
-            
+    
         except Exception as e:
             logger.error(f"Error in storage in FAISS: {str(e)}")
             return False
+
     
     def _load_state(self):
         """Loads the previous state if it exists"""
@@ -1308,10 +1301,15 @@ def main():
                         help='Skip creation of essential info files')
     parser.add_argument('--skip-faiss', action='store_true',
                         help='Skip storage in FAISS')
+    parser.add_argument('--embed-model',
+                        default='intfloat/multilingual-e5-large',
+                        help='HuggingFace model name or path for embeddings')
+
     
     args = parser.parse_args()
     
     processor = CIMAVetProcessor(args.output_dir, args.workers)
+    processor.embed_model_path = args.embed_model
     
     # Run the pipeline with skip-step options
     if not args.skip_json:

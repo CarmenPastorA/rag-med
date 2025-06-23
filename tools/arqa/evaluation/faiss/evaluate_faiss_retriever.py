@@ -1,3 +1,5 @@
+# evaluate_faiss_retriever.py
+
 import json
 import os
 from datetime import datetime
@@ -16,19 +18,31 @@ dunder_info.inject_dunder(__name__) # injects the variables
 
 from tools.arqa.faiss_search import FaissSearch
 from shared.veterinary_utils.embedding_model import EmbeddingModel
+from shared.veterinary_utils.jina_embedding_model import JinaEmbeddingModel
 from tools.arqa.evaluation.metrics import precision_at_k, recall_at_k, hit_at_k, mrr, normalized_precision_at_k, n_relevant_retrieved
 
 # === Evaluation configuration ===
 K = 50
 DEVICE = "cuda"
+QUESTIONS_PATH = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/generated_datasets/structured_mistral_min3.jsonl")
+
 EMBEDDING_MODEL_PATH = "intfloat/multilingual-e5-large"
 INDEX_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/index.faiss")
 MAPPING_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/mapping.json")
 CHUNKS_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff/chunks.json")
-QUESTIONS_PATH = os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/generated_datasets/structured_mistral_min3.jsonl")
+
+#EMBEDDING_MODEL_PATH = "cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR"
+#INDEX_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff_SapBERT_UMLS_2020AB_all_lang_from_XLMR/chunks_index.faiss")
+#MAPPING_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff_SapBERT_UMLS_2020AB_all_lang_from_XLMR/chunks_mapping.json")
+#CHUNKS_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff_SapBERT_UMLS_2020AB_all_lang_from_XLMR/chunks_cache.json")
+
+#EMBEDDING_MODEL_PATH = "jinaai/jina-embeddings-v3"
+#INDEX_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff_jina_embeddings_v3/chunks_index.faiss")
+#MAPPING_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff_jina_embeddings_v3/chunks_mapping.json")
+#CHUNKS_PATH = os.path.join(PROJECT_ROOT, "data/posteriori_resources/faiss_stuff_jina_embeddings_v3/chunks_cache.json")
 
 # Create a unique name for this evaluation run
-RUN_NAME = f"faiss_eval_{datetime.now().strftime('%Y-%m-%d')}_k{K}"
+RUN_NAME = f"faiss_eval_infloat_{datetime.now().strftime('%Y-%m-%d')}_k{K}"
 LOG_DIR =  os.path.join(PROJECT_ROOT, "tools/arqa/evaluation/faiss/logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_JSON = os.path.join(LOG_DIR, f"{RUN_NAME}.json")
@@ -36,6 +50,7 @@ LOG_MD = os.path.join(LOG_DIR, f"{RUN_NAME}.md")
 
 # === Load FAISS retriever with embedding model ===
 embedding_model = EmbeddingModel(EMBEDDING_MODEL_PATH, DEVICE, 512)
+#embedding_model = JinaEmbeddingModel(EMBEDDING_MODEL_PATH, DEVICE, 512)
 retriever = FaissSearch(embedding_model)
 retriever.load_index(INDEX_PATH, MAPPING_PATH, CHUNKS_PATH)
 

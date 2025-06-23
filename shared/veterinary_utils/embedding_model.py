@@ -1,5 +1,5 @@
 
-
+# embedding_model.py
 
 """
 Embedding model for veterinary medicine RAG system.

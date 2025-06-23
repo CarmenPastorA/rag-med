@@ -23,6 +23,76 @@ from shared.veterinary_utils.utils import vprint
 from shared.veterinary_utils.embedding_model import EmbeddingModel
 dunder_info.inject_dunder(__name__)  # injects the variables
 
+class FaissSearch:
+    """
+    Simple FAISS searcher over precomputed chunk embeddings.
+    Loads:
+    - chunks_index.faiss: FAISS index
+    - chunks_mapping.json: FAISS ID -> chunk metadata
+    - chunks_cache.json: chunk_id -> full text
+    """
+
+    def __init__(self, embedding_model: EmbeddingModel):
+        self.embedding_model = embedding_model
+        self.index = None
+        self.id_to_info = {}
+        self.chunk_cache = {}
+
+    def load_index(self, index_path: str, mapping_path: str, cache_path: str) -> None:
+        """
+        Loads the FAISS index and mapping data.
+        """
+        if not os.path.exists(index_path):
+            raise FileNotFoundError(f"Index file not found: {index_path}")
+        if not os.path.exists(mapping_path):
+            raise FileNotFoundError(f"Mapping file not found: {mapping_path}")
+        if not os.path.exists(cache_path):
+            raise FileNotFoundError(f"Cache file not found: {cache_path}")
+
+        self.index = faiss.read_index(index_path)
+
+        with open(mapping_path, "r", encoding="utf-8") as f:
+            mapping = json.load(f)
+            self.id_to_info = {int(k): v for k, v in mapping.items()}
+
+        with open(cache_path, "r", encoding="utf-8") as f:
+            self.chunk_cache = json.load(f)
+
+    def search(self, query: str, k: int = 10) -> List[Dict]:
+        """
+        Perform a search over the chunk index.
+        Returns top-k results sorted by FAISS similarity score.
+        """
+        if self.index is None:
+            raise RuntimeError("FAISS index is not loaded.")
+
+        query_emb = self.embedding_model.get_embeddings(
+            [query],
+            batch_size=1,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
+
+        actual_k = min(k, self.index.ntotal)
+        scores, indices = self.index.search(query_emb, actual_k)
+
+        results = []
+        for i, idx in enumerate(indices[0]):
+            if idx == -1 or idx not in self.id_to_info:
+                continue
+            chunk_info = self.id_to_info[idx]
+            chunk_id = chunk_info["chunk_id"]
+            text = self.chunk_cache.get(chunk_id, {}).get("text", "")
+
+            results.append({
+                "chunk_id": chunk_id,
+                "text": text,
+                "metadata": chunk_info["metadata"],
+                "score": float(scores[0][i])
+            })
+
+        return results
+
 
 class HierarchicalFaissSearch:
     """
