@@ -101,17 +101,18 @@ def plot_unified_metrics(df: pd.DataFrame, output_path: str) -> None:
         "bm25_k50",
         "faiss_k10",
         "faiss_k50",
-        "primary_faiss_k10",
-        "primary_faiss_k50",
-        "hybrid_k10",
-        "hybrid_k50",
-        "hybrid_k50_alpha0_2",
-        "hybrid_k50_alpha0_6",
-        "hierarchical_faiss_k50",
+        "faiss_esencial_k10",
+        "faiss_esencial_k50",
+        "latefusion_k10",
+        "latefusion_k50",
+        "latefusion_k50_alpha0_2",
+        "latefusion_k50_alpha0_6",
+        "hierarchical_faiss_k50"
     ]
 
     # Apply order as categorical
     df["run_name"] = pd.Categorical(df["run_name"], categories=order, ordered=True)
+    df = df[df["run_name"].isin(order)]
     df_sorted = df.sort_values("run_name")
 
     # Prepare labels and colors
@@ -155,17 +156,18 @@ def plot_individual_metric(df: pd.DataFrame, metric: str, title: str, output_pat
         "bm25_k50",
         "faiss_k10",
         "faiss_k50",
-        "primary_faiss_k10",
-        "primary_faiss_k50",
-        "hybrid_k10",
-        "hybrid_k50",
-        "hybrid_k50_alpha0_2",
-        "hybrid_k50_alpha0_6",
-        "hierarchical_faiss_k50",
+        "faiss_esencial_k10",
+        "faiss_esencial_k50",
+        "latefusion_k10",
+        "latefusion_k50",
+        "latefusion_k50_alpha0_2",
+        "latefusion_k50_alpha0_6",
+        "hierarchical_faiss_k50"
     ]
 
     # Apply order as categorical
     df["run_name"] = pd.Categorical(df["run_name"], categories=order, ordered=True)
+    df = df[df["run_name"].isin(order)]
     df_sorted = df.sort_values("run_name")
 
     x_labels = df_sorted["run_name"].tolist()

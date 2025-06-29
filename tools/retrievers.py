@@ -72,7 +72,8 @@ def get_faiss_results(question: str, top_k: int = 10, device: str = "cuda") -> l
             "doc_id": normalize_doc_id(r["metadata"].get("document_id", r["chunk_id"])),
             "content": r["text"]
         }
-        for r in _faiss_search.search(query=question, k=top_k)
+        for r in _faiss_search.hierarchical_search(query=question, top_documents=10, top_chunks=top_k)
+
     ]
 
 def get_late_fusion_with_fallback(

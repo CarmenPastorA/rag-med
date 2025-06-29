@@ -32,3 +32,13 @@ def generate_answer_with_vllm(
     )
 
     return response.choices[0].message.content.strip()
+
+
+def get_answer_from_context(
+    question: str,
+    context: str,
+    model: str = "mistralai/Mistral-7B-Instruct-v0.2"
+) -> str:
+    """Wrapper function to allow easy switching or extension of answer generation."""
+    return generate_answer_with_vllm(question, context, model)
+
