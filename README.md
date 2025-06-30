@@ -85,32 +85,15 @@ retriever architectures were tested:
 
 - **BM25** – keyword based retrieval using a sparse index.
 - **FAISS** – dense retrieval with embeddings and a FAISS index.
-- **Hierarchical FAISS** – first retrieves documents then re-ranks their
-  chunks.
+- **Hierarchical FAISS** – double FAISS (first esencial information + document chunks)
 - **Late fusion (BM25 + FAISS)** – independent BM25 and FAISS rankings are
   linearly combined.
 
 Empirically the late fusion strategy offered the best trade-off between
-precision and recall. It consistently achieved the highest MRR in our logs
-(see `tools/arqa/evaluation/hybrid/logs/latefusion_k10.md`).
+precision and recall. It consistently achieved the highest scores (see `tools/arqa/evaluation/hybrid/logs/latefusion_k50.md`).
 
 Example result files such as `bm25_k10.md` or `latefusion_k50.md` report
 precision, recall and MRR scores for each configuration.
-
-```
-$ head tools/arqa/evaluation/bm25/logs/bm25_k10.md
-```
-
-shows global metrics such as mean precision@k and mean recall@k.
-
-## Running tests
-
-A very small test suite ensures that the orchestrator module can be imported.
-Execute it with:
-
-```bash
-pytest -q
-```
 
 ## License
 
