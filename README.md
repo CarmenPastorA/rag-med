@@ -28,6 +28,7 @@ answer questions with a language model served by [vLLM](https://github.com/vllm-
 │   ├── reader.py             # vLLM client helper to generate final answers
 │   ├── retrievers.py         # Retrieval functions (BM25, FAISS, hybrid)
 │   ├── rag_orchestrator.py   # Pipeline orchestrating retrieval and generation
+│   ├── rag_pipeline.py       # Library exposing the `run_rag_pipeline` function
 │   └── test_orchestrator.py  # Minimal tests ensuring the orchestrator loads
 └── requirements.txt          # Python dependencies
 ```
@@ -57,9 +58,10 @@ using a vLLM-served model. It is the recommended way to run the system interacti
 
 ## Running the RAG pipeline
 
-The main entry point is `tools/rag_orchestrator.py`. It can run different
-retrieval strategies and feed the resulting context to the language model served
-by vLLM.
+The command-line entry point is `tools/rag_orchestrator.py`. Internally it uses
+`tools/rag_pipeline.py` which exposes the `run_rag_pipeline` function.  This
+function can also be imported in your own scripts to obtain an answer given a
+question and a retrieval strategy.
 
 Example usage:
 
@@ -78,10 +80,22 @@ python run_with_gpu.py tools/rag_orchestrator.py --question "..."
 
 ## Results
 
-Evaluation scripts and logs are available under `tools/arqa/evaluation`. They
-contain metrics for BM25, FAISS and hybrid retrieval approaches. Example result
-files include `bm25_k10.md` and `hybrid_k50.md` which report precision, recall
-and MRR scores for different configurations.
+Evaluation scripts and logs are available under `tools/arqa/evaluation`. Several
+retriever architectures were tested:
+
+- **BM25** – keyword based retrieval using a sparse index.
+- **FAISS** – dense retrieval with embeddings and a FAISS index.
+- **Hierarchical FAISS** – first retrieves documents then re-ranks their
+  chunks.
+- **Late fusion (BM25 + FAISS)** – independent BM25 and FAISS rankings are
+  linearly combined.
+
+Empirically the late fusion strategy offered the best trade-off between
+precision and recall. It consistently achieved the highest MRR in our logs
+(see `tools/arqa/evaluation/hybrid/logs/latefusion_k10.md`).
+
+Example result files such as `bm25_k10.md` or `latefusion_k50.md` report
+precision, recall and MRR scores for each configuration.
 
 ```
 $ head tools/arqa/evaluation/bm25/logs/bm25_k10.md
