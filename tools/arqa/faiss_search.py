@@ -107,7 +107,7 @@ class HierarchicalFaissSearch:
     perform efficient similarity searches.
     """
     
-    def __init__(self, embedding_model: EmbeddingModel, separator: str = "@", verbose: bool = True):
+    def __init__(self, embedding_model: EmbeddingModel, separator: str = "@", verbose: bool = False):
         """
         Initialize the hierarchical FAISS search system.
         
@@ -558,7 +558,42 @@ class HierarchicalFaissSearch:
             raise RuntimeError("Chunks index not loaded.")
         return self.chunks_index
 
-
+    def get_doc_embeddings(self, doc_ids: list[str]) -> dict[str, np.ndarray]:
+        """
+        Compute document-level embeddings by averaging the FAISS chunk embeddings
+        for each document ID in the list.
+    
+        Args:
+            doc_ids (list[str]): List of normalized document IDs.
+    
+        Returns:
+            dict: Mapping from doc_id to average embedding (np.ndarray).
+        """
+        from collections import defaultdict
+        from shared.veterinary_utils.utils import normalize_doc_id
+    
+        if self.chunks_cache is None or self.chunks_index is None or self.chunks_id_to_info is None:
+            raise ValueError("Chunk cache/index/mapping not loaded.")
+    
+        doc_to_embeddings = defaultdict(list)
+    
+        for faiss_id, meta in self.chunks_id_to_info.items():
+            doc_id = normalize_doc_id(meta["metadata"]["document_id"])
+            chunk_id = meta["metadata"]["chunk_id"]
+            full_chunk_id = f"{doc_id}@{chunk_id}"
+    
+            if doc_id in doc_ids and full_chunk_id in self.chunks_cache:
+                emb = self.chunks_index.reconstruct(faiss_id)
+                doc_to_embeddings[doc_id].append(emb)
+    
+        doc_embeddings = {}
+        for doc_id, vectors in doc_to_embeddings.items():
+            if vectors:
+                avg_emb = np.mean(vectors, axis=0)
+                norm_emb = avg_emb / np.linalg.norm(avg_emb)
+                doc_embeddings[doc_id] = norm_emb.astype(np.float32)
+    
+        return doc_embeddings
 
 
 def example_usage():
