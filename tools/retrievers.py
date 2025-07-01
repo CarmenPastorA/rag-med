@@ -40,6 +40,7 @@ _bm25_model = None
 _embedding_model = None
 _faiss_chunks = None
 _faiss_search = None
+_doc_to_chunks = None  # doc_id -> list of (faiss_id, full_chunk_id)
 
 def get_bm25_results(question: str, top_k: int = 50, score_threshold: float = 8.0) -> list[str]:
     global _bm25_model
@@ -249,21 +250,18 @@ def get_late_fusion_with_fallback_optimized(
     faiss_top_k: int = 20,
     fallback_chunk_limit: int = 2,
     device: str = "cuda",
-    verbose: bool = True
+    verbose: bool = False
 ) -> list[dict]:
     """
-    Optimized hybrid retrieval method combining FAISS semantic results with BM25 fallback.
-    - Uses an inverted index to access chunks per document directly.
-    - Avoids full iteration over all chunks.
-    - Reuses the query embedding for faster re-ranking.
-    Intended as a drop-in replacement to improve performance and scalability.
+    Optimized hybrid retrieval: FAISS semantic + fallback BM25 not in FAISS.
+    Uses cached doc-to-chunks mapping and chunks cache for faster lookup.
     """
-    global _embedding_model, _faiss_search, _faiss_chunks
+    global _embedding_model, _faiss_search, _faiss_chunks, _doc_to_chunks
 
     if _embedding_model is None:
         _embedding_model = EmbeddingModel(EMBEDDING_MODEL_NAME, device, 512)
     if _faiss_search is None:
-        _faiss_search = HierarchicalFaissSearch(_embedding_model)
+        _faiss_search = HierarchicalFaissSearch(_embedding_model, verbose=False)
         _faiss_search.load_indices(
             essential_index_path=ESSENTIAL_INDEX_PATH,
             essential_mapping_path=ESSENTIAL_MAPPING_PATH,
@@ -275,13 +273,22 @@ def get_late_fusion_with_fallback_optimized(
     if _faiss_chunks is None:
         with open(CHUNKS_CACHE_PATH, "r", encoding="utf-8") as f:
             _faiss_chunks = json.load(f)
+    if _doc_to_chunks is None:
+        with open(CHUNKS_MAPPING_PATH, "r", encoding="utf-8") as f:
+            mapping = json.load(f)
+        from collections import defaultdict
+        _doc_to_chunks = defaultdict(list)
+        for faiss_id_str, info in mapping.items():
+            doc_id = normalize_doc_id(info["metadata"]["document_id"])
+            chunk_id = info["metadata"]["chunk_id"]
+            full_chunk_id = f"{doc_id}@{chunk_id}"
+            _doc_to_chunks[doc_id].append((int(faiss_id_str), full_chunk_id))
 
-    doc_to_chunks = build_doc_to_chunk_index(CHUNKS_MAPPING_PATH)
-
-    # Retrieve chunks with FAISS
+    # Retrieve top FAISS chunks
     faiss_results = _faiss_search.search_chunks_only(query=question, top_k=faiss_top_k)
-    faiss_doc_ids = set()
     faiss_chunks = []
+    faiss_doc_ids = set()
+
     for res in faiss_results:
         doc_id = normalize_doc_id(res["metadata"].get("document_id", res["chunk_id"].split("@")[0]))
         faiss_doc_ids.add(doc_id)
@@ -291,29 +298,28 @@ def get_late_fusion_with_fallback_optimized(
             "content": res["text"].strip()
         })
 
-    # BM25 docs not covered by FAISS
+    # BM25 fallback doc IDs
     bm25_doc_ids = [normalize_doc_id(d) for d in get_bm25_results(question, top_k=bm25_top_n, score_threshold=0)]
     fallback_doc_ids = [doc_id for doc_id in bm25_doc_ids if doc_id not in faiss_doc_ids][:bm25_fallback_top_n]
 
-    # Reuse the query embedding
+    # Embed the query once
     query_emb = _embedding_model.get_embeddings([question], convert_to_numpy=True, normalize_embeddings=True).squeeze()
 
-    selected_fallback_chunks = []
+    # Select fallback chunks
     fallback_scores = []
+    selected_fallback_chunks = []
 
     for doc_id in fallback_doc_ids:
-        if doc_id not in doc_to_chunks:
+        if doc_id not in _doc_to_chunks:
             continue
-        chunks_info = doc_to_chunks[doc_id]
         similarities = []
-        for faiss_id, full_chunk_id in chunks_info:
+        for faiss_id, full_chunk_id in _doc_to_chunks[doc_id]:
             if full_chunk_id not in _faiss_chunks:
                 continue
-            chunk_text = _faiss_chunks[full_chunk_id]["text"]
+            text = _faiss_chunks[full_chunk_id]["text"]
             chunk_emb = _faiss_search.get_chunk_index().reconstruct(faiss_id)
-            sim_score = float(np.dot(chunk_emb, query_emb))
-            similarities.append((full_chunk_id, chunk_text, sim_score))
-
+            score = float(np.dot(chunk_emb, query_emb))
+            similarities.append((full_chunk_id, text, score))
         top_chunks = sorted(similarities, key=lambda x: x[2], reverse=True)[:fallback_chunk_limit]
         for chunk_id, text, score in top_chunks:
             fallback_scores.append(score)
@@ -325,7 +331,7 @@ def get_late_fusion_with_fallback_optimized(
             })
 
     if verbose:
-        print(f"\n[Fallback OPTIMIZED Summary]")
+        print(f"\n⚡ [Fallback OPTIMIZED Summary]")
         print(f"BM25 top-N: {bm25_top_n}")
         print(f"Fallback candidates: {len(fallback_doc_ids)}")
         print(f"Chunks added from fallback: {len(selected_fallback_chunks)}")

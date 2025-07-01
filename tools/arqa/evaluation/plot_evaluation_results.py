@@ -107,7 +107,8 @@ def plot_unified_metrics(df: pd.DataFrame, output_path: str) -> None:
         "latefusion_k50",
         "latefusion_k50_alpha0_2",
         "latefusion_k50_alpha0_6",
-        "hierarchical_faiss_k50"
+        "hierarchical_faiss_k50",
+        "late_fusion_fallback_k20_apha0.5"
     ]
 
     # Apply order as categorical
@@ -162,7 +163,8 @@ def plot_individual_metric(df: pd.DataFrame, metric: str, title: str, output_pat
         "latefusion_k50",
         "latefusion_k50_alpha0_2",
         "latefusion_k50_alpha0_6",
-        "hierarchical_faiss_k50"
+        "hierarchical_faiss_k50",
+        "late_fusion_fallback_k20_apha0.5"
     ]
 
     # Apply order as categorical
