@@ -67,8 +67,8 @@ Example usage:
 
 ```bash
 python tools/rag_orchestrator.py \
-    --question "¿Qué medicamentos se pueden utilizar en cerdos para tratar coccidiosis?" \
-    --retriever late+fallback --max_docs 10 --bm25_k 30 --faiss_k 15
+    --question "¿Qué medicamentos se pueden utilizar en perros para la desparasitación?" \
+    --retriever late+fallback
 ```
 
 The helper `run_with_gpu.py` can execute any script on the GPU with the lowest
@@ -88,9 +88,11 @@ retriever architectures were tested:
 - **Hierarchical FAISS** – double FAISS (first esencial information + document chunks)
 - **Late fusion (BM25 + FAISS)** – independent BM25 and FAISS rankings are
   linearly combined.
+- **Late fusion + fallback (BM25 + FAISS)** – late fusion with semantic fallback for BM25-only documents, optimized using cached doc/chunk mappings.
 
-Empirically the late fusion strategy offered the best trade-off between
-precision and recall. It consistently achieved the highest scores (see `tools/arqa/evaluation/hybrid/logs/latefusion_k50.md`).
+Empirically, the **late fusion + fallback** strategy achieved the **best trade-off between precision and recall**, outperforming the rest in most metrics:
+
+![Retriever comparison summary](tools/arqa/evaluation/plots/summary_comparison.png)
 
 Example result files such as `bm25_k10.md` or `latefusion_k50.md` report
 precision, recall and MRR scores for each configuration.

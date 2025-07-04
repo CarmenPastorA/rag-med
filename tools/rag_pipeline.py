@@ -12,7 +12,7 @@ from tools.retrievers import (
     get_bm25_results,
     get_faiss_results,
     get_late_fusion_results,
-    get_late_fusion_with_fallback
+    get_late_fusion_with_fallback_optimized
 )
 from tools.reader import get_answer_from_context
 
@@ -49,7 +49,7 @@ def run_rag_pipeline(
         )
 
     elif retriever == "late+fallback":
-        docs = get_late_fusion_with_fallback(
+        docs = get_late_fusion_with_fallback_optimized(
             question,
             bm25_top_n=bm25_k,
             faiss_top_k=faiss_k,

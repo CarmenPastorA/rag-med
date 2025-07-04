@@ -8,7 +8,6 @@
 - Device: cuda
 
 ## Global Metrics
-- **mean_precision@k**: 0.1709
 - **mean_normalized_precision@k**: 0.966
 - **mean_recall@k**: 0.9309
 - **mean_hit@k**: 0.8536
@@ -21,8 +20,6 @@
 - **final_top_k**: 20
 - **alpha**: 0.5
 - **device**: cuda
-- **fallback_count**: 0
-- **fallback_ratio**: 0.0
 
 ---
 ## Sample Questions (First 5)

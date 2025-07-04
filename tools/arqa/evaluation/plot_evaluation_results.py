@@ -97,18 +97,18 @@ def plot_unified_metrics(df: pd.DataFrame, output_path: str) -> None:
 
     # Manual order
     order = [
-        "bm25_k10",
+        #"bm25_k10",
         "bm25_k50",
-        "faiss_k10",
+        #"faiss_k10",
         "faiss_k50",
-        "faiss_esencial_k10",
+        #"faiss_esencial_k10",
         "faiss_esencial_k50",
-        "latefusion_k10",
+        #"latefusion_k10",
         "latefusion_k50",
-        "latefusion_k50_alpha0_2",
-        "latefusion_k50_alpha0_6",
+        #"latefusion_k50_alpha0_2",
+        #"latefusion_k50_alpha0_6",
         "hierarchical_faiss_k50",
-        "late_fusion_fallback_k20_apha0.5"
+        "late_fusion_fallback"
     ]
 
     # Apply order as categorical
@@ -153,18 +153,18 @@ def plot_individual_metric(df: pd.DataFrame, metric: str, title: str, output_pat
 
     # Manual order
     order = [
-        "bm25_k10",
+        #"bm25_k10",
         "bm25_k50",
-        "faiss_k10",
+        #"faiss_k10",
         "faiss_k50",
-        "faiss_esencial_k10",
+        #"faiss_esencial_k10",
         "faiss_esencial_k50",
-        "latefusion_k10",
+        #"latefusion_k10",
         "latefusion_k50",
-        "latefusion_k50_alpha0_2",
-        "latefusion_k50_alpha0_6",
+        #"latefusion_k50_alpha0_2",
+        #"latefusion_k50_alpha0_6",
         "hierarchical_faiss_k50",
-        "late_fusion_fallback_k20_apha0.5"
+        "late_fusion_fallback"
     ]
 
     # Apply order as categorical
@@ -198,7 +198,7 @@ if __name__ == "__main__":
     df_metrics = collect_all_metrics(log_dirs)
 
     # Generate unified plot
-    unified_out_file = os.path.join(PLOTS_DIR, "unified_metrics_comparison.png")
+    unified_out_file = os.path.join(PLOTS_DIR, "summary_comparison.png")
     plot_unified_metrics(df_metrics, unified_out_file)
 
     # Generate individual metric plots
@@ -209,9 +209,9 @@ if __name__ == "__main__":
         ("mrr", "MRR"),
     ]
 
-    for metric, title in metrics_to_plot:
-        out_file = os.path.join(PLOTS_DIR, f"{metric}_comparison.png")
-        plot_individual_metric(df_metrics, metric, title, out_file)
+    #for metric, title in metrics_to_plot:
+    #    out_file = os.path.join(PLOTS_DIR, f"{metric}_comparison.png")
+    #    plot_individual_metric(df_metrics, metric, title, out_file)
 
     print(f"Unified plot and individual plots saved to: {PLOTS_DIR}")
 
